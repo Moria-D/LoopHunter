@@ -2,9 +2,38 @@ import librosa
 import numpy as np
 import warnings
 import random
-from scipy.ndimage import median_filter
+from scipy.spatial.distance import cdist
 
 warnings.filterwarnings('ignore')
+
+def snap_to_transient(y, idx, search_window=500):
+    """瞬态对齐"""
+    if idx < search_window: return max(0, idx)
+    if idx >= len(y) - search_window: return min(len(y), idx)
+    
+    window = y[idx - search_window : idx + search_window]
+    energy = librosa.feature.rms(y=window, frame_length=64, hop_length=16)[0]
+    if len(energy) == 0: return idx
+    local_peak_frame = np.argmax(energy)
+    shift = (local_peak_frame * 16) - search_window
+    
+    # 过零点微调
+    new_idx = idx + shift
+    zc_window = y[max(0, new_idx - 50) : min(len(y), new_idx + 50)]
+    if len(zc_window) > 0:
+        zc = np.where(np.diff(np.signbit(zc_window)))[0]
+        if len(zc) > 0:
+            closest_zc = zc[np.argmin(np.abs(zc - 50))]
+            return new_idx - 50 + closest_zc
+            
+    return new_idx
+
+def get_bar_similarity(features, idx_a, idx_b):
+    """计算两个小节的声学相似度 (0-1)"""
+    if idx_a >= len(features) or idx_b >= len(features): return 0.0
+    # Cosine distance: 0 is same, 1 is diff
+    dist = cdist([features[idx_a]], [features[idx_b]], metric='cosine')[0][0]
+    return 1.0 - dist
 
 class AudioRemixer:
     def __init__(self, audio_path, sr=22050):
@@ -14,175 +43,278 @@ class AudioRemixer:
         self.y, self.sr = librosa.load(audio_path, sr=sr)
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         
-        self.beats = None
-        self.beat_times = None
-        self.loops = [] # 存储找到的 infinite loops
+        self.bars = []
+        self.bar_features = None
 
     def analyze(self):
-        """
-        使用 Beat-Synchronous Shingling 技术寻找无限循环点
-        """
-        print("Analyzing Beat Structure...")
-        
-        # 1. 提取源分离增强的节拍
+        """分析小节与特征"""
+        print("Analyzing structure...")
         y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         tempo, beat_frames = librosa.beat.beat_track(y=y_percussive, sr=self.sr)
+        if np.ndim(tempo) > 0: tempo = tempo.item()
         
-        # 确保 beat_frames 有效
-        if len(beat_frames) < 16:
-            # 如果节拍太少，强制按固定时间间隔生成
-            beat_frames = np.linspace(0, len(self.y), int(self.duration * 2), dtype=int)
+        beats = librosa.frames_to_time(beat_frames, sr=self.sr)
+        if len(beats) > 0 and beats[0] > 0.5:
+            beats = np.insert(beats, 0, 0.0)
             
-        self.beat_times = librosa.frames_to_time(beat_frames, sr=self.sr)
+        # 构建小节 (4/4拍)
+        self.bars = []
+        beats_per_bar = 4
         
-        # 2. 提取特征 (Chroma + MFCC)
-        # Chroma 捕捉和声/旋律 (Harmonic)
+        if len(beats) < 4:
+            self.bars.append({"index": 0, "start": 0.0, "end": self.duration, "duration": self.duration})
+        else:
+            for i in range(0, len(beats), beats_per_bar):
+                if i + beats_per_bar < len(beats):
+                    start_t = beats[i]
+                    end_t = beats[i + beats_per_bar]
+                    self.bars.append({
+                        "index": len(self.bars),
+                        "start": start_t,
+                        "end": end_t,
+                        "duration": end_t - start_t
+                    })
+            
+            # 强制包含文件尾部
+            last_bar = self.bars[-1]
+            if last_bar['end'] < self.duration:
+                if self.duration - last_bar['end'] > 1.0:
+                     self.bars.append({
+                        "index": len(self.bars),
+                        "start": last_bar['end'],
+                        "end": self.duration,
+                        "duration": self.duration - last_bar['end']
+                    })
+                else:
+                    last_bar['end'] = self.duration
+                    last_bar['duration'] = self.duration - last_bar['start']
+
+        # 提取小节特征 (用于计算相似度)
         chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=self.sr)
-        # MFCC 捕捉音色/鼓点 (Percussive)
-        mfcc = librosa.feature.mfcc(y=y_percussive, sr=self.sr, n_mfcc=13)
+        mfcc = librosa.feature.mfcc(y=self.y, sr=self.sr)
+        features = np.vstack([chroma, mfcc])
         
-        # 3. 节拍同步 (Beat Synchronization) - 关键步骤
-        # 将特征压缩到 Beat 维度，消除微小的节奏偏差
-        chroma_sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
-        mfcc_sync = librosa.util.sync(mfcc, beat_frames, aggregate=np.median)
+        n_bars = len(self.bars)
+        self.bar_features = np.zeros((n_bars, features.shape[0]))
         
-        # 归一化并堆叠
-        chroma_sync = librosa.util.normalize(chroma_sync, axis=1)
-        mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
-        features = np.vstack([chroma_sync, mfcc_sync])
+        for i, bar in enumerate(self.bars):
+            s_frame = librosa.time_to_frames(bar['start'], sr=self.sr)
+            e_frame = librosa.time_to_frames(bar['end'], sr=self.sr)
+            if e_frame > s_frame:
+                self.bar_features[i] = np.mean(features[:, s_frame:e_frame], axis=1)
+
+    def generate_path(self, target_duration):
+        if not self.bars: self.analyze()
+        if not self.bars: return []
         
-        # 4. 特征堆叠 (Shingling) - 核心魔法
-        # 我们不只比较单拍，而是比较 "4拍的序列"
-        # 这样能保证 Loop 不仅仅是音高一样，而是乐句走向一样
-        stack_size = 4 
-        features_stacked = librosa.feature.stack_memory(features, n_steps=stack_size, delay=1)
+        # 分流逻辑
+        if target_duration < self.duration:
+            return self._generate_shortening_path(target_duration)
+        else:
+            return self._generate_extending_path(target_duration)
+
+    def _generate_shortening_path(self, target):
+        """
+        缩短模式：寻找最佳单点剪辑 (Single Cut)
+        Head (0->A) + Tail (B->End) = Target
+        """
+        n_bars = len(self.bars)
+        needed_remove = self.duration - target
         
-        # 5. 计算自相似矩阵 (Recurrence Matrix)
-        # 这里的 R[i, j] 表示：第 i 个 beat 和 第 j 个 beat 周围的音乐有多像
-        R = librosa.segment.recurrence_matrix(features_stacked, width=3, mode='affinity', sym=True)
+        # 极端情况：目标太短，直接取开头或结尾
+        if target < 10.0:
+            # 这种情况下只保留 Outro
+            trim_start = max(0, self.duration - target)
+            return [{
+                "source_start": trim_start, "source_end": self.duration,
+                "duration": target, "type": "Tail Only", "xfade": 0, "remix_start": 0.0
+            }]
+
+        best_score = -1.0
+        best_cut = None # (idx_a, idx_b)
         
-        # 6. 提取对角线 (寻找 Loop)
-        self.loops = []
-        n_beats = R.shape[0]
+        # 限制搜索范围，保护 Intro 和 Outro
+        # A 点 (跳出点): 至少保留前 2 小节
+        min_a = 2
+        # B 点 (跳入点): 至少保留后 2 小节
+        max_b = n_bars - 2
         
-        # 动态阈值策略：从高分开始找，如果找不到就降低要求
-        thresholds = [0.85, 0.75, 0.65, 0.55] 
-        
-        for thresh in thresholds:
-            if len(self.loops) > 50: break # 如果已经找到足够多的 loop，停止
+        # 遍历所有可能的 A 点
+        for i in range(min_a, n_bars - 4):
+            # 计算理想的 B 点位置
+            # time(B) ≈ time(A) + needed_remove
+            time_a = self.bars[i]['end']
+            ideal_time_b = time_a + needed_remove
             
-            # 扫描对角线 (Lag)
-            # 限制最小 Loop 长度为 4 拍 (1小节)，最大为全曲的一半
-            for lag in range(4, n_beats // 2):
-                diag = np.diagonal(R, offset=lag)
+            # 在 ideal_time_b 附近寻找最近的小节线 j
+            # 我们可以通过查找 bar start time 来快速定位
+            # 简单遍历优化：只看 i 之后的部分
+            
+            for j in range(i + 1, max_b):
+                time_b = self.bars[j]['start']
                 
-                # 寻找连续的高分区域
-                # 使用中值滤波平滑，去除噪点
-                diag_smooth = median_filter(diag, size=3)
+                # 如果这个 B 点会导致总时长误差太大 (> 5秒)，跳过
+                est_duration = time_a + (self.duration - time_b)
+                if abs(est_duration - target) > 5.0:
+                    continue
                 
-                high_sim_indices = np.where(diag_smooth > thresh)[0]
+                # 计算 A -> B 的衔接分数
+                # 1. 声学相似度 (下一小节 i+1 和 j 的相似度)
+                # 如果 bar[i+1] 和 bar[j] 很像，说明从 i 跳到 j 听起来像是在继续播放 i+1
+                # 或者：比较 bar[i] 和 bar[j-1] (前文相似性)
                 
-                if len(high_sim_indices) == 0: continue
+                # 我们比较 "应该接什么" (i+1) 和 "实际接了什么" (j)
+                sim_score = get_bar_similarity(self.bar_features, i + 1, j)
                 
-                # 合并连续段落
-                segments = np.split(high_sim_indices, np.where(np.diff(high_sim_indices) != 1)[0] + 1)
+                # 2. 能量匹配度
+                # 3. 节奏相位 (都是 Bar Start，天然对齐)
                 
-                for seg in segments:
-                    # 只有当相似长度超过 4 拍时才认为是一个稳固的 Loop
-                    if len(seg) >= 4:
-                        # 这是一个 Loop!
-                        # 原理：Beat[i] 和 Beat[i+lag] 很像
-                        # 意味着我们可以从 Beat[i+lag] 跳回 Beat[i] (Loop Back)
-                        # 或者从 Beat[i] 跳到 Beat[i+lag] (Skip Forward)
-                        
-                        start_beat_idx = seg[0]
-                        end_beat_idx = seg[-1] # 匹配段落的结束
-                        
-                        # 转换回时间
-                        # Start of the segment
-                        t_start = self.beat_times[start_beat_idx]
-                        
-                        # Jump Point (Source) -> Landing Point (Target)
-                        # 我们记录的是一段“可循环区域”
-                        # Loop Start: 区域的开始
-                        # Loop End: 区域的结束
-                        # Jump: Loop End -> Loop Start
-                        
-                        # 在 Audjust 逻辑里，Loop 通常指：这段音乐本身是重复的
-                        # 也就是 Time A 和 Time B 是相似的。
-                        # 我们这里提取：从 t_start 开始，持续 length 秒的片段，是可以在内部循环的
-                        
-                        # 但为了更精准，我们定义 Loop 为一对跳转点：
-                        # Point A (Early) and Point B (Late)
-                        # 这里的 seg 代表了 A 和 B 的重合部分
-                        
-                        # Point A (Loop Start)
-                        idx_a = start_beat_idx
-                        # Point B (Loop End - where we jump back from)
-                        idx_b = start_beat_idx + lag
-                        
-                        if idx_b >= len(self.beat_times): continue
-                        
-                        time_a = self.beat_times[idx_a]
-                        time_b = self.beat_times[idx_b]
-                        
-                        # 质量分数
-                        score = np.mean(diag[seg])
-                        
-                        # 去重检查 (防止太多相似的)
-                        is_duplicate = False
-                        for existing in self.loops:
-                            if abs(existing['start'] - time_a) < 0.5 and abs(existing['end'] - time_b) < 0.5:
-                                is_duplicate = True
-                                break
-                        
-                        if not is_duplicate:
-                            self.loops.append({
-                                "start": time_a,      # Loop Point 1
-                                "end": time_b,        # Loop Point 2 (Jump back from here)
-                                "duration": time_b - time_a, # Loop Length
-                                "score": score,
-                                "beats_len": lag,
-                                "segment_len": len(seg) # 相似区域的稳固程度
-                            })
+                if sim_score > best_score:
+                    best_score = sim_score
+                    best_cut = (i, j)
 
-        # 按分数排序
-        self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
-        print(f"Found {len(self.loops)} candidate loops.")
+        # 构建 Timeline
+        timeline = []
+        t_cursor = 0.0
+        
+        if best_cut:
+            idx_a, idx_b = best_cut
+            # Part 1: 0 -> A.end
+            dur_a = self.bars[idx_a]['end']
+            timeline.append({
+                "source_start": 0.0,
+                "source_end": dur_a,
+                "duration": dur_a,
+                "type": "Head",
+                "xfade": 0,
+                "remix_start": 0.0
+            })
+            t_cursor += dur_a
+            
+            # Part 2: B.start -> End
+            start_b = self.bars[idx_b]['start']
+            dur_b = self.duration - start_b
+            timeline.append({
+                "source_start": start_b,
+                "source_end": self.duration,
+                "duration": dur_b,
+                "type": "Tail",
+                "xfade": 25, # 切割点给一个标准的 Crossfade
+                "remix_start": t_cursor
+            })
+        else:
+            # Fallback: 直接硬切中间
+            cut_point = target / 2
+            tail_len = target / 2
+            timeline.append({
+                "source_start": 0.0, "source_end": cut_point, "duration": cut_point, 
+                "type": "Head", "xfade": 0, "remix_start": 0.0
+            })
+            timeline.append({
+                "source_start": self.duration - tail_len, "source_end": self.duration, 
+                "duration": tail_len, "type": "Tail", "xfade": 40, "remix_start": cut_point
+            })
+            
+        return timeline
 
-    def render_loop_preview(self, loop_data, repetitions=3):
-        """
-        生成 Loop 预览音频：A -> B -> A -> B ...
-        """
-        start_t = loop_data['start']
-        end_t = loop_data['end']
+    def _generate_extending_path(self, target_duration):
+        """延长模式：循环 Body (保留之前的逻辑)"""
+        n_bars = len(self.bars)
         
-        s_idx = int(start_t * self.sr)
-        e_idx = int(end_t * self.sr)
+        # Intro/Outro 锁定
+        intro_len = min(4, n_bars)
+        intro_bars = self.bars[:intro_len]
         
-        # 基础片段
-        segment = self.y[s_idx:e_idx]
+        outro_count = 4 if n_bars > 16 else 2
+        outro_start_idx = max(intro_len, n_bars - outro_count)
+        outro_bars = self.bars[outro_start_idx:]
         
-        # 拼接
-        output = segment
+        intro_dur = sum(b['duration'] for b in intro_bars)
+        outro_dur = sum(b['duration'] for b in outro_bars)
         
-        # 使用简单的 Crossfade 拼接
-        fade_len = int(0.03 * self.sr) # 30ms fade
+        body_start_idx = intro_len
+        body_end_idx = outro_start_idx - 1
         
-        for _ in range(repetitions - 1):
-            if len(segment) < fade_len:
-                output = np.concatenate((output, segment))
+        timeline = []
+        current_dur = 0.0
+        
+        # Intro
+        for b in intro_bars:
+            timeline.append({**b, "type": "Intro", "xfade": 0, "remix_start": 0.0})
+        current_dur += intro_dur
+        
+        # Body Loop
+        fill_target = target_duration - outro_dur
+        if body_end_idx >= body_start_idx:
+            curr_idx = body_start_idx
+            while current_dur < fill_target:
+                bar = self.bars[curr_idx]
+                prev = timeline[-1]
+                is_natural = (bar['index'] == prev['index'] + 1)
+                xfade = 0 if is_natural else 20
+                label = "Body" if is_natural else "Loop ⟳"
+                
+                timeline.append({**bar, "type": "Body", "label": label, "xfade": xfade})
+                current_dur += bar['duration']
+                
+                curr_idx += 1
+                if curr_idx > body_end_idx:
+                    curr_idx = body_start_idx # Loop back
+        
+        # Outro
+        for i, b in enumerate(outro_bars):
+            prev = timeline[-1]
+            is_natural = (b['index'] == prev['index'] + 1)
+            xfade = 0 if is_natural else 40
+            timeline.append({**b, "type": "Outro", "xfade": xfade})
+            current_dur += b['duration']
+            
+        # Timestamp update
+        t_c = 0.0
+        for x in timeline:
+            x['remix_start'] = t_c
+            t_c += x['duration']
+            
+        return timeline
+
+    def render(self, timeline):
+        if not timeline: return np.array([])
+        
+        total_samples = int(sum([seg['duration'] for seg in timeline]) * self.sr)
+        output = np.zeros(total_samples + 44100)
+        
+        cursor = 0
+        for i, seg in enumerate(timeline):
+            s_idx = int(seg['source_start'] * self.sr)
+            e_idx = int(seg['source_end'] * self.sr)
+            
+            # 瞬态对齐 (除了文件末尾)
+            if i > 0: s_idx = snap_to_transient(self.y, s_idx)
+            # 只有当这不是文件真正的末尾时才对齐结束点
+            if seg['source_end'] < self.duration - 0.5:
+                e_idx = snap_to_transient(self.y, e_idx)
+            
+            if e_idx > len(self.y): e_idx = len(self.y)
+            chunk = self.y[s_idx:e_idx]
+            
+            fade_ms = seg.get('xfade', 0)
+            fade_pts = int((fade_ms / 1000) * self.sr)
+            
+            if i == 0 or fade_pts == 0:
+                output[cursor:cursor+len(chunk)] = chunk
+                cursor += len(chunk)
             else:
-                # Crossfade the end of output with start of segment
-                prev_tail = output[-fade_len:]
-                curr_head = segment[:fade_len]
+                overlap_start = cursor - fade_pts
+                if overlap_start < 0: overlap_start = 0
+                prev = output[overlap_start:cursor]
+                curr = chunk[:fade_pts]
+                n = min(len(prev), len(curr))
                 
-                lin = np.linspace(0, 1, fade_len)
-                w_in = np.sin(lin * np.pi / 2)
-                w_out = np.cos(lin * np.pi / 2)
+                if n > 0:
+                    lin = np.linspace(0, 1, n)
+                    output[overlap_start:overlap_start+n] = prev[:n]*(1-lin) + curr[:n]*lin
+                rest = chunk[n:]
+                output[cursor:cursor+len(rest)] = rest
+                cursor += len(rest)
                 
-                overlap = prev_tail * w_out + curr_head * w_in
-                
-                output = np.concatenate((output[:-fade_len], overlap, segment[fade_len:]))
-                
-        return output
+        return output[:cursor]

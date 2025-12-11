@@ -10,83 +10,80 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from division import AudioRemixer
 
-st.set_page_config(layout="wide", page_title="LoopHunter - Audjust Style")
+st.set_page_config(layout="wide", page_title="LoopHunter - Smart Cut")
 
-# 注入 CSS 以模仿 Audjust 的深色/霓虹风格
+st.title("🎛️ LoopHunter (Auto-Fit Mode)")
+st.caption("Intelligently shorten or extend music while preserving Intro & Outro.")
+
+# CSS
 st.markdown("""
 <style>
-    .main { background-color: #0d1117; }
-    .stButton>button { 
-        width: 100%; 
-        border-radius: 6px; 
-        font-weight: 600; 
-        background-color: #21262d; 
-        color: white; 
-        border: 1px solid #30363d;
-    }
-    .stButton>button:hover {
-        border-color: #8b949e;
-        color: #58a6ff;
-    }
-    .loop-row {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 10px;
-        margin-bottom: 8px;
-    }
-    h1, h2, h3, p { color: #c9d1d9; }
+    .stButton>button { width: 100%; font-weight: bold; border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎛️ Infinite Loop Finder")
-st.caption("Detects segments strictly usable for seamless infinite looping (A -> B -> A).")
-
 if 'remixer' not in st.session_state: st.session_state.remixer = None
-if 'selected_loop' not in st.session_state: st.session_state.selected_loop = None
-if 'page' not in st.session_state: st.session_state.page = 0
+if 'timeline' not in st.session_state: st.session_state.timeline = None
 
-def plot_waveform_with_loop(y, sr, loop=None):
-    """绘制带高亮的波形图"""
-    fig, ax = plt.subplots(figsize=(12, 2))
-    fig.patch.set_facecolor('#0d1117')
-    ax.set_facecolor('#0d1117')
+def plot_connection_map(y, sr, timeline, total_remix_dur):
+    source_dur = librosa.get_duration(y=y, sr=sr)
     
-    # 绘制波形
-    librosa.display.waveshow(y, sr=sr, ax=ax, color='#7ee787', alpha=0.6) # Audjust Green
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [1, 1], 'hspace': 0.4})
+    fig.patch.set_facecolor('#0E1117')
     
-    if loop:
-        # 绘制 Loop 区域 (从 start 到 end)
-        rect = patches.Rectangle((loop['start'], -1), loop['duration'], 2, 
-                                 facecolor='#1f6feb', alpha=0.5, edgecolor=None) # Audjust Blue
-        ax.add_patch(rect)
+    # Source
+    ax1.set_facecolor('#1E1E1E')
+    ax1.set_title("SOURCE: Original Waveform", color='white', loc='left')
+    ax1.set_xlim(0, source_dur)
+    ax1.set_yticks([])
+    ax1.tick_params(axis='x', colors='white')
+    librosa.display.waveshow(y, sr=sr, ax=ax1, color='#444', alpha=0.5)
+    
+    # Remix
+    ax2.set_facecolor('#1E1E1E')
+    ax2.set_title("REMIX: Generated Timeline", color='white', loc='left')
+    ax2.set_xlim(0, total_remix_dur)
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks([])
+    ax2.tick_params(axis='x', colors='white')
+    
+    colors = {'Intro': '#00bcd4', 'Head': '#00bcd4', 'Body': '#4caf50', 'Outro': '#9c27b0', 'Tail': '#9c27b0'}
+    
+    for i, seg in enumerate(timeline):
+        src_s = seg['source_start']
+        src_e = seg['source_end']
+        remix_s = seg['remix_start']
+        remix_e = remix_s + seg['duration']
         
-        # 标记点
-        ax.axvline(x=loop['start'], color='white', linestyle='--', linewidth=1, alpha=0.8)
-        ax.axvline(x=loop['end'], color='white', linestyle='--', linewidth=1, alpha=0.8)
+        l_type = seg['type']
+        color = colors.get(l_type, '#999')
         
-        # 文字
-        ax.text(loop['start'], 0.8, "Start", color='white', fontsize=8)
-        ax.text(loop['end'], 0.8, "End (Loop Point)", color='white', ha='right', fontsize=8)
+        # Source Block
+        rect_src = patches.Rectangle((src_s, -1), src_e-src_s, 2, facecolor=color, alpha=0.4)
+        ax1.add_patch(rect_src)
+        
+        # Remix Block
+        rect_remix = patches.Rectangle((remix_s, 0.2), remix_e-remix_s, 0.6, facecolor=color, edgecolor='white', linewidth=0.5)
+        ax2.add_patch(rect_remix)
+        
+        # Time Labels
+        if i == 0 or timeline[i-1]['type'] != seg['type']:
+             ax2.text(remix_s, 0.9, f"{remix_s:.1f}s", color='white', fontsize=8, rotation=45)
+             
+        # Center Label
+        ax2.text((remix_s+remix_e)/2, 0.5, l_type, color='white', ha='center', va='center', fontsize=9, fontweight='bold')
 
-    ax.set_yticks([])
-    ax.set_xlim(0, librosa.get_duration(y=y, sr=sr))
-    ax.tick_params(axis='x', colors='#8b949e')
-    # remove spines
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-        
     plt.tight_layout()
     return fig
 
-# --- Sidebar ---
+# Sidebar
 with st.sidebar:
-    st.header("Upload Audio")
-    uploaded_file = st.file_uploader("MP3 / WAV", type=["mp3", "wav"])
+    st.header("1. Upload")
+    uploaded_file = st.file_uploader("Audio", type=["mp3", "wav"])
     
     if uploaded_file:
-        if st.button("Analyze Loops"):
-            with st.spinner("Scanning for beat-sync loops..."):
+        if st.button("Analyze"):
+            with st.spinner("Analyzing structure..."):
                 suffix = ".mp3" if uploaded_file.name.endswith(".mp3") else ".wav"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tfile:
                     tfile.write(uploaded_file.read())
@@ -95,88 +92,42 @@ with st.sidebar:
                 remixer = AudioRemixer(tpath)
                 remixer.analyze()
                 st.session_state.remixer = remixer
-                st.session_state.selected_loop = None
-                st.session_state.page = 0
+                st.session_state.timeline = None
                 os.remove(tpath)
-                
-                count = len(remixer.loops)
-                if count > 0:
-                    st.success(f"Unlock {count} loops!")
-                else:
-                    st.error("No loops found. Try a more repetitive song.")
+                st.success("Analysis Done.")
 
-# --- Main Area ---
-if st.session_state.remixer:
-    remixer = st.session_state.remixer
-    loops = remixer.loops
-    
-    # 1. Top Waveform
-    st.subheader("Waveform Visualization")
-    fig = plot_waveform_with_loop(remixer.y, remixer.sr, st.session_state.selected_loop)
-    st.pyplot(fig)
-    
-    # 2. Filter / Stats
-    c1, c2 = st.columns([3, 1])
-    c1.markdown(f"**Found {len(loops)} Segments usable for infinite looping**")
-    
     st.divider()
     
-    # 3. Loop List (Audjust Style)
-    # 分页显示，防止卡顿
-    page_size = 10
-    
-    start_idx = st.session_state.page * page_size
-    end_idx = start_idx + page_size
-    current_loops = loops[start_idx:end_idx]
-    
-    # Grid Header
-    h1, h2, h3, h4 = st.columns([1, 4, 2, 2])
-    h1.markdown("#")
-    h2.markdown("Loop Segment")
-    h3.markdown("Duration")
-    h4.markdown("Action")
-    
-    for i, loop in enumerate(current_loops):
-        idx = start_idx + i
+    if st.session_state.remixer:
+        orig_dur = st.session_state.remixer.duration
+        target_dur = st.slider("Target Duration (s)", 15, int(orig_dur*2), int(orig_dur), step=5)
         
-        # Container styling simulation
-        with st.container():
-            col1, col2, col3, col4 = st.columns([1, 4, 2, 2])
-            
-            # Index
-            col1.write(f"{idx+1}")
-            
-            # Mini-Visual (Text representation of bar)
-            score_bar = "█" * int(loop['score'] * 10)
-            col2.caption(f"Confidence: {score_bar} ({loop['score']:.2f})")
-            col2.text(f"Region: {loop['start']:.1f}s — {loop['end']:.1f}s")
-            
-            # Duration
-            col3.markdown(f"**{loop['duration']:.2f}s**")
-            col3.caption(f"~{int(loop['beats_len']/4)} Bars")
-            
-            # Actions
-            if col4.button("▶ Play Loop", key=f"play_{idx}"):
-                st.session_state.selected_loop = loop
-                # 生成拼接音频 A->B->A->B
-                looped_audio = remixer.render_loop_preview(loop, repetitions=4)
-                
-                # Encode to play
-                buf = io.BytesIO()
-                sf.write(buf, looped_audio, remixer.sr, format='WAV')
-                st.audio(buf.getvalue(), format='audio/wav', start_time=0)
-                
-            st.markdown("---")
-            
-    # Pagination
-    p1, p2, p3 = st.columns([1, 1, 1])
-    if p1.button("Previous") and st.session_state.page > 0:
-        st.session_state.page -= 1
-        st.rerun() # [Fixed] 使用 st.rerun() 替代 experimental_rerun
+        if st.button("Generate Remix"):
+            tl = st.session_state.remixer.generate_path(target_dur)
+            st.session_state.timeline = tl
+
+# Main
+if st.session_state.remixer and st.session_state.timeline:
+    tl = st.session_state.timeline
+    remixer = st.session_state.remixer
+    final_dur = sum(s['duration'] for s in tl)
     
-    if p3.button("Next") and end_idx < len(loops):
-        st.session_state.page += 1
-        st.rerun() # [Fixed] 使用 st.rerun() 替代 experimental_rerun
+    st.subheader("🔗 Remix Map")
+    st.info(f"Original: {remixer.duration:.1f}s | Target: {target_dur}s | Actual: {final_dur:.1f}s")
+    
+    fig = plot_connection_map(remixer.y, remixer.sr, tl, final_dur)
+    st.pyplot(fig)
+    
+    st.subheader("🎧 Final Audio")
+    if st.button("▶️ Render"):
+        with st.spinner("Rendering..."):
+            audio = remixer.render(tl)
+            if np.max(np.abs(audio)) > 0: audio = audio / np.max(np.abs(audio)) * 0.95
+            
+            buf = io.BytesIO()
+            sf.write(buf, audio, remixer.sr, format='WAV')
+            st.audio(buf.getvalue(), format='audio/wav')
+            st.download_button("Download WAV", buf, "remix.wav")
 
 elif not uploaded_file:
-    st.info("Please upload an audio file to start scanning for loops.")
+    st.info("Please upload a file.")
