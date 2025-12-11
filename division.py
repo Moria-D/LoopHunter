@@ -117,7 +117,6 @@ class AudioRemixer:
                                 is_dup = True; break
                         if not is_dup:
                             # 简单的类型推断 (基于能量和频段)
-                            # 这里做一个简化的伪分类，实际需要更复杂的模型
                             loop_type = "melody"
                             if lag < 16: loop_type = "beats"
                             elif lag > 64: loop_type = "climax"
@@ -138,6 +137,7 @@ class AudioRemixer:
         """
         looping_points = []
         
+        # 构建 JSON 数据结构
         for loop in self.loops:
             looping_points.append({
                 "duration": round(loop['duration'], 2),
@@ -152,15 +152,22 @@ class AudioRemixer:
             "looping_points": looping_points
         }
         
-        # 生成用户友好文本 (全部输出，不省略)
-        lines = [f"Analysis Report for: {source_filename}"]
-        lines.append(f"Total Duration: {self.duration:.2f}s")
-        lines.append(f"Total Loops Found: {len(self.loops)}")
-        lines.append("-" * 40)
+        # 构建用户易读文本 (User Friendly Version)
+        lines = []
+        lines.append(f"========== AUDIO ANALYSIS REPORT ==========")
+        lines.append(f"Source File : {source_filename}")
+        lines.append(f"Duration    : {self.duration:.2f} seconds")
+        lines.append(f"Loops Found : {len(self.loops)}")
+        lines.append("")
+        lines.append("--- DETAILED LOOP POINTS ---")
         
-        # 使用 enumerate 遍历所有 loops
-        for i, pt in enumerate(looping_points): 
-            lines.append(f"Loop #{i+1:02d}: Start {pt['start_position']:6.2f}s | Dur {pt['duration']:5.2f}s | Type: {pt['type']}")
+        # 遍历所有 Loop，不省略
+        for i, pt in enumerate(looping_points):
+            # 格式化输出对齐
+            lines.append(f"Loop #{i+1:02d} | Start: {pt['start_position']:6.2f}s | Duration: {pt['duration']:5.2f}s | Type: {pt['type'].upper()}")
+            
+        lines.append("")
+        lines.append("========== END OF REPORT ==========")
             
         return raw_data, "\n".join(lines)
 

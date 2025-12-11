@@ -9,6 +9,7 @@ import tempfile
 import json
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib.ticker as ticker
 from division import AudioRemixer
 
 st.set_page_config(layout="wide", page_title="LoopHunter - Final UI")
@@ -38,9 +39,9 @@ st.markdown("""
         margin-top: 10px;
     }
     
-    /* [NEW] 强制下载按钮等高 */
+    /* 强制下载按钮等高 */
     .stDownloadButton button {
-        min-height: 2.8rem;
+        height: 3rem;
         padding-top: 0.4rem;
         padding-bottom: 0.4rem;
     }
@@ -84,32 +85,82 @@ def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
     plt.tight_layout(pad=0)
     return fig
 
-def plot_remix_structure(timeline, total_remix_dur):
+def plot_remix_waveform(remix_y, sr, timeline, total_remix_dur):
+    """
+    绘制合成后的总体波形图，并根据 Timeline 映射颜色
+    """
     fig, ax = plt.subplots(figsize=(12, 3))
     fig.patch.set_facecolor('#0d1117')
     ax.set_facecolor('#161b22')
+    
+    # 设置 X 轴
     ax.set_xlim(0, total_remix_dur)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([])
     ax.set_xlabel("Time (s)", color='#8b949e')
     ax.tick_params(axis='x', colors='#8b949e')
+    # 隐藏 Y 轴刻度
+    ax.set_yticks([])
     
+    # 降采样步长，提高绘图性能
+    step = 100
+    
+    # 遍历 timeline，分段绘制波形
     for i, seg in enumerate(timeline):
-        start = seg['remix_start']
-        dur = seg['duration']
+        start_time = seg['remix_start']
+        duration = seg['duration']
+        end_time = start_time + duration
+        
+        # 确定颜色
+        # Linear/Head/Tail/Outro -> Green (#238636)
+        # Loop Extension -> Blue (#1f6feb)
+        # Jump Point -> Purple (#d2a8ff)
         label = seg['type']
-        c = '#238636'
-        if label == 'Loop Extension': c = '#1f6feb'
-        if seg.get('is_jump'): c = '#d2a8ff'
-        rect = patches.Rectangle((start, 0.2), dur, 0.6, facecolor=c, edgecolor='white', linewidth=0.5)
-        ax.add_patch(rect)
-        ax2_text = f"{start:.1f}s"
-        ax.text(start, 0.9, ax2_text, color='white', rotation=45, ha='left', va='bottom', fontsize=8)
-        if dur > 2.0:
-            lbl = label if "Loop" not in label else "Loop"
-            ax.text(start + dur/2, 0.5, lbl, color='white', ha='center', va='center', fontsize=9, fontweight='bold')
-        if seg.get('xfade', 0) > 0:
-             ax.scatter([start], [0.8], color='white', s=20, zorder=10)
+        color = '#238636' # Default Green
+        if label == 'Loop Extension': color = '#1f6feb'
+        if seg.get('is_jump'): color = '#d2a8ff'
+        
+        # 计算在 remix_y 中的采样点范围
+        start_sample = int(start_time * sr)
+        end_sample = int(end_time * sr)
+        
+        # 边界保护
+        if end_sample > len(remix_y): end_sample = len(remix_y)
+        if start_sample >= end_sample: continue
+        
+        # 提取当前段的音频数据并降采样
+        segment_y = remix_y[start_sample:end_sample:step]
+        
+        # 生成对应的时间轴
+        # np.linspace 生成的点数必须与 segment_y 长度一致
+        segment_times = np.linspace(start_time, end_time, num=len(segment_y))
+        
+        # 绘制波形
+        ax.plot(segment_times, segment_y, color=color, linewidth=0.8, alpha=0.9)
+        
+        # --- 标记关键点 (Start Marker) ---
+        # 绘制白色虚线表示切分点
+        ax.axvline(x=start_time, color='white', linestyle=':', linewidth=0.8, alpha=0.6)
+        
+        # 标注精确时间 (0.1s)
+        # 为了防止文字重叠，可以根据奇偶稍微错开高度，或者旋转
+        ax.text(start_time, 1.05, f"{start_time:.1f}s", color='white', rotation=0, ha='left', va='bottom', fontsize=8)
+        
+        # 如果有 Crossfade/Jump，额外标记一个点
+        if seg.get('xfade', 0) > 0 or seg.get('is_jump'):
+             ax.scatter([start_time], [0], color='white', s=15, zorder=10)
+
+        # 在波形中间添加标签 (如果够长)
+        if duration > 2.0:
+            lbl_text = "Loop" if "Loop" in label else label
+            mid_point = start_time + duration / 2
+            # 放在波形下方或上方避免遮挡
+            ax.text(mid_point, -0.8, lbl_text, color='white', ha='center', va='center', fontsize=8, alpha=0.7)
+
+    # 去除边框
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_color('#30363d')
+
     plt.tight_layout()
     return fig
 
@@ -134,7 +185,7 @@ with st.sidebar:
                 st.session_state.final_audio = None
                 st.session_state.loop_page = 0 
                 
-                # 生成分析报告
+                # --- 生成并保存分析报告 ---
                 json_data, text_data = remixer.export_analysis_data(uploaded_file.name)
                 st.session_state.analysis_report = {"json": json_data, "text": text_data}
                 
@@ -147,14 +198,13 @@ with st.sidebar:
 
     st.divider()
     
-    # --- 修复后的下载区域 ---
+    # --- 下载区域 ---
     if st.session_state.remixer and st.session_state.analysis_report:
         st.header("2. Analysis Data")
         
         json_str = json.dumps(st.session_state.analysis_report["json"], indent=4)
         text_str = st.session_state.analysis_report["text"]
         
-        # 使用 use_container_width 对齐
         c1, c2 = st.columns(2)
         with c1:
             st.download_button(
@@ -254,8 +304,20 @@ if st.session_state.remixer:
     if st.session_state.timeline:
         st.divider()
         st.subheader("4. Remix Result")
-        fig_struct = plot_remix_structure(st.session_state.timeline, st.session_state.final_dur)
-        st.pyplot(fig_struct)
+        
+        # --- 这里的可视化改为波形图 ---
+        if st.session_state.final_audio is not None:
+            fig_wave = plot_remix_waveform(
+                st.session_state.final_audio, 
+                st.session_state.remixer.sr, 
+                st.session_state.timeline, 
+                st.session_state.final_dur
+            )
+            st.pyplot(fig_wave)
+        else:
+            st.warning("Please generate remix first.")
+        # ---------------------------
+        
         c_a, c_b = st.columns(2)
         c_a.info(f"Target: {target_dur}s")
         c_b.success(f"Actual: {st.session_state.final_dur:.1f}s")
