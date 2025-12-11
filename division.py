@@ -20,13 +20,12 @@ class AudioRemixer:
         self.beat_features = None 
         self.loops = []
         
-        # 计算 Onset Envelope 用于瞬态检测
+        # 计算全局特征用于相对比较
         self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
+        self.global_rms = np.sqrt(np.mean(self.y**2))
 
     def _refine_cut_point(self, time_sec, search_window_ms=50):
-        """
-        [微调切点] 瞬态回溯 + 过零点锁定
-        """
+        """[微调切点] 瞬态回溯 + 过零点锁定"""
         center_sample = int(time_sec * self.sr)
         search_samples = int((search_window_ms / 1000) * self.sr)
         
@@ -45,7 +44,6 @@ class AudioRemixer:
         if f_start < f_end:
             local_onset_idx = f_start + np.argmax(self.onset_env[f_start:f_end])
             transient_sample = librosa.frames_to_samples(local_onset_idx)
-            # 往回倒推 10ms，保留 Attack
             pre_roll = int(0.01 * self.sr) 
             target_sample = max(0, transient_sample - pre_roll)
         else:
@@ -64,6 +62,39 @@ class AudioRemixer:
             return z_start + best_zc
         
         return target_sample
+
+    def _classify_segment(self, start_time, end_time):
+        """
+        [NEW] 基于音频特征动态分类 Loop 类型
+        """
+        s_idx = int(start_time * self.sr)
+        e_idx = int(end_time * self.sr)
+        chunk = self.y[s_idx:e_idx]
+        
+        if len(chunk) == 0: return "melody"
+        
+        # 1. 计算相对能量 (Relative Energy)
+        chunk_rms = np.sqrt(np.mean(chunk**2))
+        energy_ratio = chunk_rms / (self.global_rms + 1e-6)
+        
+        # 2. 计算过零率 (Zero Crossing Rate) - 衡量是否嘈杂/打击乐丰富
+        zcr = np.mean(librosa.feature.zero_crossing_rate(chunk))
+        
+        # 3. 逻辑判定
+        # 高能量 + 高频丰富 = Climax (高潮/副歌)
+        if energy_ratio > 1.1:
+            return "climax"
+        
+        # 低能量 = Atmosphere/Breakdown (但在 Loop 列表中我们统一归为 Melody)
+        if energy_ratio < 0.6:
+            return "atmosphere"
+            
+        # 中等能量 + 高过零率 = Beats (节奏为主)
+        if zcr > 0.08: # 经验阈值
+            return "beats"
+            
+        # 其他情况归为旋律
+        return "melody"
 
     def analyze(self):
         """分析音频结构"""
@@ -116,10 +147,8 @@ class AudioRemixer:
                             if abs(l['start'] - time_start) < 1.0 and abs(l['end'] - time_end) < 1.0:
                                 is_dup = True; break
                         if not is_dup:
-                            # 简单的类型推断 (基于能量和频段)
-                            loop_type = "melody"
-                            if lag < 16: loop_type = "beats"
-                            elif lag > 64: loop_type = "climax"
+                            # [NEW] 使用新的特征分类方法
+                            loop_type = self._classify_segment(time_start, time_end)
                             
                             self.loops.append({
                                 "start": time_start,
@@ -132,17 +161,14 @@ class AudioRemixer:
         self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
 
     def export_analysis_data(self, source_filename="audio.wav"):
-        """
-        [NEW] 生成分析报告文档
-        """
+        """生成分析报告文档"""
         looping_points = []
         
-        # 构建 JSON 数据结构
         for loop in self.loops:
             looping_points.append({
                 "duration": round(loop['duration'], 2),
                 "start_position": round(loop['start'], 2),
-                "type": loop['type'], # beats, melody, climax
+                "type": loop['type'], 
                 "confidence": round(loop['score'], 2)
             })
             
@@ -152,7 +178,6 @@ class AudioRemixer:
             "looping_points": looping_points
         }
         
-        # 构建用户易读文本 (User Friendly Version)
         lines = []
         lines.append(f"========== AUDIO ANALYSIS REPORT ==========")
         lines.append(f"Source File : {source_filename}")
@@ -160,11 +185,11 @@ class AudioRemixer:
         lines.append(f"Loops Found : {len(self.loops)}")
         lines.append("")
         lines.append("--- DETAILED LOOP POINTS ---")
+        lines.append(f"{'#':<4} | {'Start':<9} | {'Dur':<8} | {'Type':<10} | {'Conf':<6}")
+        lines.append("-" * 50)
         
-        # 遍历所有 Loop，不省略
         for i, pt in enumerate(looping_points):
-            # 格式化输出对齐
-            lines.append(f"Loop #{i+1:02d} | Start: {pt['start_position']:6.2f}s | Duration: {pt['duration']:5.2f}s | Type: {pt['type'].upper()}")
+            lines.append(f"#{i+1:02d}  | {pt['start_position']:6.2f}s  | {pt['duration']:5.2f}s  | {pt['type'].upper():<10} | {pt['confidence']:.2f}")
             
         lines.append("")
         lines.append("========== END OF REPORT ==========")
@@ -216,7 +241,6 @@ class AudioRemixer:
         return sorted(selected_loops, key=lambda x: x['start'])
 
     def _find_best_cut_points(self, target_duration):
-        """弹性搜索最佳缝合点"""
         n_beats = len(self.beat_times)
         remove_amount = self.duration - target_duration
         best_score = -999.0
