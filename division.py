@@ -2,38 +2,10 @@ import librosa
 import numpy as np
 import warnings
 import random
+from scipy.ndimage import median_filter
 from scipy.spatial.distance import cdist
 
 warnings.filterwarnings('ignore')
-
-def snap_to_transient(y, idx, search_window=500):
-    """瞬态对齐"""
-    if idx < search_window: return max(0, idx)
-    if idx >= len(y) - search_window: return min(len(y), idx)
-    
-    window = y[idx - search_window : idx + search_window]
-    energy = librosa.feature.rms(y=window, frame_length=64, hop_length=16)[0]
-    if len(energy) == 0: return idx
-    local_peak_frame = np.argmax(energy)
-    shift = (local_peak_frame * 16) - search_window
-    
-    # 过零点微调
-    new_idx = idx + shift
-    zc_window = y[max(0, new_idx - 50) : min(len(y), new_idx + 50)]
-    if len(zc_window) > 0:
-        zc = np.where(np.diff(np.signbit(zc_window)))[0]
-        if len(zc) > 0:
-            closest_zc = zc[np.argmin(np.abs(zc - 50))]
-            return new_idx - 50 + closest_zc
-            
-    return new_idx
-
-def get_bar_similarity(features, idx_a, idx_b):
-    """计算两个小节的声学相似度 (0-1)"""
-    if idx_a >= len(features) or idx_b >= len(features): return 0.0
-    # Cosine distance: 0 is same, 1 is diff
-    dist = cdist([features[idx_a]], [features[idx_b]], metric='cosine')[0][0]
-    return 1.0 - dist
 
 class AudioRemixer:
     def __init__(self, audio_path, sr=22050):
@@ -43,278 +15,266 @@ class AudioRemixer:
         self.y, self.sr = librosa.load(audio_path, sr=sr)
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         
-        self.bars = []
-        self.bar_features = None
+        self.beat_times = None
+        self.beat_features = None 
+        self.loops = [] 
 
     def analyze(self):
-        """分析小节与特征"""
-        print("Analyzing structure...")
+        """分析 Beat 结构并保存特征"""
         y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         tempo, beat_frames = librosa.beat.beat_track(y=y_percussive, sr=self.sr)
-        if np.ndim(tempo) > 0: tempo = tempo.item()
         
-        beats = librosa.frames_to_time(beat_frames, sr=self.sr)
-        if len(beats) > 0 and beats[0] > 0.5:
-            beats = np.insert(beats, 0, 0.0)
+        if len(beat_frames) < 16:
+            beat_frames = np.linspace(0, len(self.y), int(self.duration * 2), dtype=int)
             
-        # 构建小节 (4/4拍)
-        self.bars = []
-        beats_per_bar = 4
+        self.beat_times = librosa.frames_to_time(beat_frames, sr=self.sr)
         
-        if len(beats) < 4:
-            self.bars.append({"index": 0, "start": 0.0, "end": self.duration, "duration": self.duration})
-        else:
-            for i in range(0, len(beats), beats_per_bar):
-                if i + beats_per_bar < len(beats):
-                    start_t = beats[i]
-                    end_t = beats[i + beats_per_bar]
-                    self.bars.append({
-                        "index": len(self.bars),
-                        "start": start_t,
-                        "end": end_t,
-                        "duration": end_t - start_t
-                    })
-            
-            # 强制包含文件尾部
-            last_bar = self.bars[-1]
-            if last_bar['end'] < self.duration:
-                if self.duration - last_bar['end'] > 1.0:
-                     self.bars.append({
-                        "index": len(self.bars),
-                        "start": last_bar['end'],
-                        "end": self.duration,
-                        "duration": self.duration - last_bar['end']
-                    })
-                else:
-                    last_bar['end'] = self.duration
-                    last_bar['duration'] = self.duration - last_bar['start']
-
-        # 提取小节特征 (用于计算相似度)
+        # 1. 提取特征
         chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=self.sr)
-        mfcc = librosa.feature.mfcc(y=self.y, sr=self.sr)
-        features = np.vstack([chroma, mfcc])
+        mfcc = librosa.feature.mfcc(y=y_percussive, sr=self.sr, n_mfcc=13)
         
-        n_bars = len(self.bars)
-        self.bar_features = np.zeros((n_bars, features.shape[0]))
+        # 2. 同步到 Beat
+        chroma_sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+        mfcc_sync = librosa.util.sync(mfcc, beat_frames, aggregate=np.median)
         
-        for i, bar in enumerate(self.bars):
-            s_frame = librosa.time_to_frames(bar['start'], sr=self.sr)
-            e_frame = librosa.time_to_frames(bar['end'], sr=self.sr)
-            if e_frame > s_frame:
-                self.bar_features[i] = np.mean(features[:, s_frame:e_frame], axis=1)
+        chroma_sync = librosa.util.normalize(chroma_sync, axis=1)
+        mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
+        
+        # 保存特征
+        self.beat_features = np.vstack([chroma_sync, mfcc_sync]).T
+        
+        # 3. 寻找 Loops (仅用于延长模式)
+        stack_size = 4 
+        features = np.vstack([chroma_sync, mfcc_sync])
+        features_stacked = librosa.feature.stack_memory(features, n_steps=stack_size, delay=1)
+        R = librosa.segment.recurrence_matrix(features_stacked, width=3, mode='affinity', sym=True)
+        
+        self.loops = []
+        n_beats = R.shape[0]
+        thresholds = [0.85, 0.75, 0.65, 0.55] 
+        
+        for thresh in thresholds:
+            if len(self.loops) > 30: break 
+            for lag in range(8, n_beats // 2):
+                diag = np.diagonal(R, offset=lag)
+                diag_smooth = median_filter(diag, size=3)
+                high_sim_indices = np.where(diag_smooth > thresh)[0]
+                if len(high_sim_indices) == 0: continue
+                segments = np.split(high_sim_indices, np.where(np.diff(high_sim_indices) != 1)[0] + 1)
+                for seg in segments:
+                    if len(seg) >= 8:
+                        start_beat = seg[0]
+                        time_start = self.beat_times[start_beat]
+                        time_end = self.beat_times[start_beat + lag]
+                        if time_end > self.duration - 0.5: continue
+                        
+                        self.loops.append({
+                            "start": time_start,
+                            "end": time_end,
+                            "duration": time_end - time_start,
+                            "score": np.mean(diag[seg]),
+                            "beats_len": lag,
+                            "type": "loop"
+                        })
+        
+        self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
 
-    def generate_path(self, target_duration):
-        if not self.bars: self.analyze()
-        if not self.bars: return []
+    def _find_best_cut_points(self, target_duration):
+        """
+        弹性搜索：寻找最佳缝合点 (A -> B)
+        策略：Score = Similarity * 1.0 - Time_Error * Penalty
+        允许用时长换音质
+        """
+        n_beats = len(self.beat_times)
+        remove_amount = self.duration - target_duration
         
-        # 分流逻辑
+        best_score = -999.0
+        best_cut = None 
+        
+        # 保护区间：头尾至少保留 4 beats (约2秒)
+        min_idx = 4
+        max_idx = n_beats - 4
+        
+        # 设定误差容忍度：如果是极短目标(<=30s)，容忍度大一点(5s)；否则小一点(3s)
+        time_tolerance = 5.0 if target_duration <= 30 else 3.0
+        
+        # 惩罚系数：每偏差1秒，扣除多少相似度分数 (0.02 = 2%)
+        # 如果用户更看重音质，这个值越小越好
+        time_penalty_weight = 0.02 
+        
+        for i in range(min_idx, max_idx):
+            time_a = self.beat_times[i]
+            
+            # 理想切入点
+            ideal_time_b = time_a + remove_amount
+            if ideal_time_b >= self.beat_times[max_idx]: break
+                
+            j_approx = np.searchsorted(self.beat_times, ideal_time_b)
+            
+            # 搜索窗口：在理想点前后找相似度最高的 beat
+            # 窗口大小根据 Tolerance 动态决定
+            search_window_beats = int(time_tolerance * 2) # 估算 beats 数
+            
+            start_j = max(i + 8, j_approx - search_window_beats)
+            end_j = min(n_beats - 4, j_approx + search_window_beats)
+            
+            if start_j >= end_j: continue
+            
+            # 批量计算相似度
+            feat_a = self.beat_features[i].reshape(1, -1)
+            feats_candidates = self.beat_features[start_j:end_j]
+            
+            # 1. 相似度分数 (0-1)
+            dists = cdist(feat_a, feats_candidates, metric='cosine')[0]
+            sims = 1.0 - dists
+            
+            # 2. 时长误差分数
+            candidate_times = self.beat_times[start_j:end_j]
+            est_durations = time_a + (self.duration - candidate_times)
+            time_errors = np.abs(est_durations - target_duration)
+            
+            # 3. 综合评分 = 相似度 - (误差 * 惩罚)
+            final_scores = sims - (time_errors * time_penalty_weight)
+            
+            # 找到局部最优
+            local_best_idx = np.argmax(final_scores)
+            local_best_score = final_scores[local_best_idx]
+            
+            if local_best_score > best_score:
+                best_score = local_best_score
+                real_j = start_j + local_best_idx
+                best_cut = (i, real_j)
+        
+        return best_cut, best_score
+
+    def plan_multi_loop_remix(self, target_duration):
+        # 1. 缩短模式
         if target_duration < self.duration:
-            return self._generate_shortening_path(target_duration)
+            # 极端情况检查
+            if target_duration < 5.0:
+                return self._plan_hard_cut(target_duration), target_duration
+
+            # 弹性搜索
+            cut_indices, score = self._find_best_cut_points(target_duration)
+            
+            timeline = []
+            if cut_indices:
+                idx_a, idx_b = cut_indices
+                time_a = self.beat_times[idx_a]
+                time_b = self.beat_times[idx_b]
+                
+                # Part 1: Head
+                timeline.append({
+                    "source_start": 0.0, "source_end": time_a, "duration": time_a,
+                    "type": "Head", "xfade": 0, "remix_start": 0.0
+                })
+                
+                # Part 2: Tail
+                tail_dur = self.duration - time_b
+                timeline.append({
+                    "source_start": time_b, "source_end": self.duration, "duration": tail_dur,
+                    "type": "Tail", "xfade": 30, "remix_start": time_a, "is_jump": True
+                })
+                
+                actual_dur = time_a + tail_dur
+                return timeline, actual_dur
+            else:
+                return self._plan_hard_cut(target_duration), target_duration
+
+        # 2. 延长模式 (逻辑不变)
         else:
-            return self._generate_extending_path(target_duration)
+            if not self.loops:
+                return [{"source_start":0, "source_end":self.duration, "duration":self.duration, "type":"Original", "remix_start":0}], self.duration
 
-    def _generate_shortening_path(self, target):
-        """
-        缩短模式：寻找最佳单点剪辑 (Single Cut)
-        Head (0->A) + Tail (B->End) = Target
-        """
-        n_bars = len(self.bars)
-        needed_remove = self.duration - target
-        
-        # 极端情况：目标太短，直接取开头或结尾
-        if target < 10.0:
-            # 这种情况下只保留 Outro
-            trim_start = max(0, self.duration - target)
-            return [{
-                "source_start": trim_start, "source_end": self.duration,
-                "duration": target, "type": "Tail Only", "xfade": 0, "remix_start": 0.0
-            }]
-
-        best_score = -1.0
-        best_cut = None # (idx_a, idx_b)
-        
-        # 限制搜索范围，保护 Intro 和 Outro
-        # A 点 (跳出点): 至少保留前 2 小节
-        min_a = 2
-        # B 点 (跳入点): 至少保留后 2 小节
-        max_b = n_bars - 2
-        
-        # 遍历所有可能的 A 点
-        for i in range(min_a, n_bars - 4):
-            # 计算理想的 B 点位置
-            # time(B) ≈ time(A) + needed_remove
-            time_a = self.bars[i]['end']
-            ideal_time_b = time_a + needed_remove
+            best_loop = self.loops[0]
+            loop_dur = best_loop['duration']
+            head_dur = best_loop['start']
+            tail_dur = self.duration - best_loop['end']
             
-            # 在 ideal_time_b 附近寻找最近的小节线 j
-            # 我们可以通过查找 bar start time 来快速定位
-            # 简单遍历优化：只看 i 之后的部分
+            needed = target_duration - (head_dur + tail_dur)
+            if needed <= 0: repeats = 1
+            else:
+                repeats = int(round(needed / loop_dur))
+                if repeats < 1: repeats = 1
             
-            for j in range(i + 1, max_b):
-                time_b = self.bars[j]['start']
+            timeline = []
+            cursor = 0.0
+            
+            timeline.append({"source_start":0.0, "source_end":best_loop['end'], "duration":best_loop['end'], "type":"Head", "xfade":0, "remix_start":0.0})
+            cursor += best_loop['end']
+            
+            for i in range(repeats):
+                timeline.append({
+                    "source_start":best_loop['start'], "source_end":best_loop['end'], "duration":loop_dur,
+                    "type":"Loop Extension", "xfade":30, "is_jump":True, "remix_start":cursor
+                })
+                cursor += loop_dur
                 
-                # 如果这个 B 点会导致总时长误差太大 (> 5秒)，跳过
-                est_duration = time_a + (self.duration - time_b)
-                if abs(est_duration - target) > 5.0:
-                    continue
-                
-                # 计算 A -> B 的衔接分数
-                # 1. 声学相似度 (下一小节 i+1 和 j 的相似度)
-                # 如果 bar[i+1] 和 bar[j] 很像，说明从 i 跳到 j 听起来像是在继续播放 i+1
-                # 或者：比较 bar[i] 和 bar[j-1] (前文相似性)
-                
-                # 我们比较 "应该接什么" (i+1) 和 "实际接了什么" (j)
-                sim_score = get_bar_similarity(self.bar_features, i + 1, j)
-                
-                # 2. 能量匹配度
-                # 3. 节奏相位 (都是 Bar Start，天然对齐)
-                
-                if sim_score > best_score:
-                    best_score = sim_score
-                    best_cut = (i, j)
-
-        # 构建 Timeline
-        timeline = []
-        t_cursor = 0.0
-        
-        if best_cut:
-            idx_a, idx_b = best_cut
-            # Part 1: 0 -> A.end
-            dur_a = self.bars[idx_a]['end']
             timeline.append({
-                "source_start": 0.0,
-                "source_end": dur_a,
-                "duration": dur_a,
-                "type": "Head",
-                "xfade": 0,
-                "remix_start": 0.0
+                "source_start":best_loop['end'], "source_end":self.duration, "duration":tail,
+                "type":"Tail", "xfade":0, "remix_start":cursor
             })
-            t_cursor += dur_a
             
-            # Part 2: B.start -> End
-            start_b = self.bars[idx_b]['start']
-            dur_b = self.duration - start_b
-            timeline.append({
-                "source_start": start_b,
-                "source_end": self.duration,
-                "duration": dur_b,
-                "type": "Tail",
-                "xfade": 25, # 切割点给一个标准的 Crossfade
-                "remix_start": t_cursor
-            })
+            return timeline, cursor + tail
+
+    def _plan_hard_cut(self, target):
+        """极端保底：根据 target 比例保留头尾"""
+        # 优先保留更多的 Tail (Outro)，因为结尾突兀比开头突兀更难受
+        tail_ratio = 0.6 
+        head_ratio = 0.4
+        
+        head_dur = target * head_ratio
+        tail_dur = target * tail_ratio
+        
+        # 寻找最近的 Beat 进行切割，稍微保证一点节奏感
+        if self.beat_times is not None:
+            idx_head = np.argmin(np.abs(self.beat_times - head_dur))
+            head_dur = self.beat_times[idx_head]
+            
+            target_tail_start = self.duration - tail_dur
+            idx_tail = np.argmin(np.abs(self.beat_times - target_tail_start))
+            # 确保不重叠
+            if idx_tail <= idx_head: idx_tail = idx_head + 1
+            if idx_tail < len(self.beat_times):
+                tail_start = self.beat_times[idx_tail]
+                tail_dur = self.duration - tail_start
         else:
-            # Fallback: 直接硬切中间
-            cut_point = target / 2
-            tail_len = target / 2
-            timeline.append({
-                "source_start": 0.0, "source_end": cut_point, "duration": cut_point, 
-                "type": "Head", "xfade": 0, "remix_start": 0.0
-            })
-            timeline.append({
-                "source_start": self.duration - tail_len, "source_end": self.duration, 
-                "duration": tail_len, "type": "Tail", "xfade": 40, "remix_start": cut_point
-            })
-            
-        return timeline
+            tail_start = self.duration - tail_dur
 
-    def _generate_extending_path(self, target_duration):
-        """延长模式：循环 Body (保留之前的逻辑)"""
-        n_bars = len(self.bars)
-        
-        # Intro/Outro 锁定
-        intro_len = min(4, n_bars)
-        intro_bars = self.bars[:intro_len]
-        
-        outro_count = 4 if n_bars > 16 else 2
-        outro_start_idx = max(intro_len, n_bars - outro_count)
-        outro_bars = self.bars[outro_start_idx:]
-        
-        intro_dur = sum(b['duration'] for b in intro_bars)
-        outro_dur = sum(b['duration'] for b in outro_bars)
-        
-        body_start_idx = intro_len
-        body_end_idx = outro_start_idx - 1
-        
-        timeline = []
-        current_dur = 0.0
-        
-        # Intro
-        for b in intro_bars:
-            timeline.append({**b, "type": "Intro", "xfade": 0, "remix_start": 0.0})
-        current_dur += intro_dur
-        
-        # Body Loop
-        fill_target = target_duration - outro_dur
-        if body_end_idx >= body_start_idx:
-            curr_idx = body_start_idx
-            while current_dur < fill_target:
-                bar = self.bars[curr_idx]
-                prev = timeline[-1]
-                is_natural = (bar['index'] == prev['index'] + 1)
-                xfade = 0 if is_natural else 20
-                label = "Body" if is_natural else "Loop ⟳"
-                
-                timeline.append({**bar, "type": "Body", "label": label, "xfade": xfade})
-                current_dur += bar['duration']
-                
-                curr_idx += 1
-                if curr_idx > body_end_idx:
-                    curr_idx = body_start_idx # Loop back
-        
-        # Outro
-        for i, b in enumerate(outro_bars):
-            prev = timeline[-1]
-            is_natural = (b['index'] == prev['index'] + 1)
-            xfade = 0 if is_natural else 40
-            timeline.append({**b, "type": "Outro", "xfade": xfade})
-            current_dur += b['duration']
-            
-        # Timestamp update
-        t_c = 0.0
-        for x in timeline:
-            x['remix_start'] = t_c
-            t_c += x['duration']
-            
-        return timeline
+        return [
+            {"source_start":0, "source_end":head_dur, "duration":head_dur, "type":"Head", "remix_start":0},
+            {"source_start":tail_start, "source_end":self.duration, "duration":tail_dur, "type":"Tail", "xfade":50, "is_jump":True, "remix_start":head_dur}
+        ]
 
-    def render(self, timeline):
+    def render_remix(self, timeline):
         if not timeline: return np.array([])
-        
-        total_samples = int(sum([seg['duration'] for seg in timeline]) * self.sr)
+        total_samples = int(sum([s['duration'] for s in timeline]) * self.sr)
         output = np.zeros(total_samples + 44100)
-        
         cursor = 0
+        
         for i, seg in enumerate(timeline):
-            s_idx = int(seg['source_start'] * self.sr)
-            e_idx = int(seg['source_end'] * self.sr)
+            s = int(seg['source_start'] * self.sr)
+            e = int(seg['source_end'] * self.sr)
+            if s >= e: continue
+            if e > len(self.y): e = len(self.y)
             
-            # 瞬态对齐 (除了文件末尾)
-            if i > 0: s_idx = snap_to_transient(self.y, s_idx)
-            # 只有当这不是文件真正的末尾时才对齐结束点
-            if seg['source_end'] < self.duration - 0.5:
-                e_idx = snap_to_transient(self.y, e_idx)
-            
-            if e_idx > len(self.y): e_idx = len(self.y)
-            chunk = self.y[s_idx:e_idx]
-            
+            chunk = self.y[s:e]
             fade_ms = seg.get('xfade', 0)
-            fade_pts = int((fade_ms / 1000) * self.sr)
+            fade_len = int((fade_ms / 1000) * self.sr)
             
-            if i == 0 or fade_pts == 0:
+            if i == 0 or fade_len == 0:
                 output[cursor:cursor+len(chunk)] = chunk
                 cursor += len(chunk)
             else:
-                overlap_start = cursor - fade_pts
-                if overlap_start < 0: overlap_start = 0
-                prev = output[overlap_start:cursor]
-                curr = chunk[:fade_pts]
+                overlap = cursor - fade_len
+                if overlap < 0: overlap = 0
+                prev = output[overlap:cursor]
+                curr = chunk[:fade_len]
                 n = min(len(prev), len(curr))
-                
                 if n > 0:
                     lin = np.linspace(0, 1, n)
-                    output[overlap_start:overlap_start+n] = prev[:n]*(1-lin) + curr[:n]*lin
-                rest = chunk[n:]
-                output[cursor:cursor+len(rest)] = rest
-                cursor += len(rest)
-                
+                    mix = prev*(1-lin) + curr*lin
+                    output[overlap:overlap+n] = mix
+                output[cursor:cursor+len(chunk)-fade_len] = chunk[fade_len:]
+                cursor += len(chunk) - fade_len
         return output[:cursor]

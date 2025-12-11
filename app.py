@@ -12,78 +12,80 @@ from division import AudioRemixer
 
 st.set_page_config(layout="wide", page_title="LoopHunter - Smart Cut")
 
-st.title("🎛️ LoopHunter (Auto-Fit Mode)")
-st.caption("Intelligently shorten or extend music while preserving Intro & Outro.")
-
-# CSS
 st.markdown("""
 <style>
-    .stButton>button { width: 100%; font-weight: bold; border-radius: 4px; }
+    .main { background-color: #0d1117; }
+    .stButton>button { width: 100%; border-radius: 6px; font-weight: 600; }
+    h1, h2, h3, p { color: #c9d1d9; }
 </style>
 """, unsafe_allow_html=True)
 
+st.title("🎛️ Audio Smart Remixer")
+st.caption("Auto-Extension & Smart Shortening.")
+
 if 'remixer' not in st.session_state: st.session_state.remixer = None
 if 'timeline' not in st.session_state: st.session_state.timeline = None
+if 'final_audio' not in st.session_state: st.session_state.final_audio = None
+if 'final_dur' not in st.session_state: st.session_state.final_dur = 0.0
 
-def plot_connection_map(y, sr, timeline, total_remix_dur):
+def plot_structure(y, sr, timeline, total_remix_dur):
     source_dur = librosa.get_duration(y=y, sr=sr)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [1, 1], 'hspace': 0.6})
+    fig.patch.set_facecolor('#0d1117')
     
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [1, 1], 'hspace': 0.4})
-    fig.patch.set_facecolor('#0E1117')
-    
-    # Source
-    ax1.set_facecolor('#1E1E1E')
-    ax1.set_title("SOURCE: Original Waveform", color='white', loc='left')
+    # 1. Source
+    ax1.set_facecolor('#161b22')
+    ax1.set_title("Source Audio", color='#8b949e', loc='left', fontsize=10)
     ax1.set_xlim(0, source_dur)
     ax1.set_yticks([])
-    ax1.tick_params(axis='x', colors='white')
-    librosa.display.waveshow(y, sr=sr, ax=ax1, color='#444', alpha=0.5)
+    ax1.tick_params(axis='x', colors='#8b949e')
+    librosa.display.waveshow(y, sr=sr, ax=ax1, color='#3fb950', alpha=0.5)
     
-    # Remix
-    ax2.set_facecolor('#1E1E1E')
-    ax2.set_title("REMIX: Generated Timeline", color='white', loc='left')
+    # 2. Remix
+    ax2.set_facecolor('#161b22')
+    ax2.set_title("Remix Structure", color='#8b949e', loc='left', fontsize=10)
     ax2.set_xlim(0, total_remix_dur)
     ax2.set_ylim(0, 1)
     ax2.set_yticks([])
-    ax2.tick_params(axis='x', colors='white')
-    
-    colors = {'Intro': '#00bcd4', 'Head': '#00bcd4', 'Body': '#4caf50', 'Outro': '#9c27b0', 'Tail': '#9c27b0'}
+    ax2.tick_params(axis='x', colors='#8b949e')
     
     for i, seg in enumerate(timeline):
-        src_s = seg['source_start']
-        src_e = seg['source_end']
-        remix_s = seg['remix_start']
-        remix_e = remix_s + seg['duration']
+        start = seg['remix_start']
+        dur = seg['duration']
+        label = seg['type']
         
-        l_type = seg['type']
-        color = colors.get(l_type, '#999')
+        c = '#238636' # Linear
+        if label == 'Loop Extension': c = '#1f6feb' # Loop
+        if seg.get('is_jump'): c = '#d2a8ff' # Tail/Skip
         
-        # Source Block
-        rect_src = patches.Rectangle((src_s, -1), src_e-src_s, 2, facecolor=color, alpha=0.4)
+        # Source highlight
+        rect_src = patches.Rectangle((seg['source_start'], -1), dur, 2, facecolor=c, alpha=0.4)
         ax1.add_patch(rect_src)
         
-        # Remix Block
-        rect_remix = patches.Rectangle((remix_s, 0.2), remix_e-remix_s, 0.6, facecolor=color, edgecolor='white', linewidth=0.5)
-        ax2.add_patch(rect_remix)
+        # Remix block
+        rect = patches.Rectangle((start, 0.2), dur, 0.6, facecolor=c, edgecolor='white', linewidth=0.5)
+        ax2.add_patch(rect)
         
-        # Time Labels
-        if i == 0 or timeline[i-1]['type'] != seg['type']:
-             ax2.text(remix_s, 0.9, f"{remix_s:.1f}s", color='white', fontsize=8, rotation=45)
-             
-        # Center Label
-        ax2.text((remix_s+remix_e)/2, 0.5, l_type, color='white', ha='center', va='center', fontsize=9, fontweight='bold')
+        # Text
+        ax2.text(start, 0.9, f"{start:.1f}s", color='white', rotation=0, ha='left', va='bottom', fontsize=8)
+        if dur > 5.0:
+            ax2.text(start + dur/2, 0.5, label, color='white', ha='center', va='center', fontsize=9, fontweight='bold')
+            
+        # Jump Marker
+        if seg.get('xfade', 0) > 0:
+             ax2.scatter([start], [0.8], color='white', s=20, zorder=10)
 
     plt.tight_layout()
     return fig
 
-# Sidebar
+# --- Sidebar ---
 with st.sidebar:
     st.header("1. Upload")
     uploaded_file = st.file_uploader("Audio", type=["mp3", "wav"])
     
     if uploaded_file:
         if st.button("Analyze"):
-            with st.spinner("Analyzing structure..."):
+            with st.spinner("Analyzing..."):
                 suffix = ".mp3" if uploaded_file.name.endswith(".mp3") else ".wav"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tfile:
                     tfile.write(uploaded_file.read())
@@ -93,41 +95,59 @@ with st.sidebar:
                 remixer.analyze()
                 st.session_state.remixer = remixer
                 st.session_state.timeline = None
+                st.session_state.final_audio = None
                 os.remove(tpath)
-                st.success("Analysis Done.")
+                st.success("Ready.")
 
     st.divider()
     
     if st.session_state.remixer:
-        orig_dur = st.session_state.remixer.duration
-        target_dur = st.slider("Target Duration (s)", 15, int(orig_dur*2), int(orig_dur), step=5)
+        duration = st.session_state.remixer.duration
+        # 允许缩短到 10s，最大 3倍
+        target_dur = st.slider("Target Duration (s)", 
+                               min_value=10, 
+                               max_value=int(duration*3), 
+                               value=int(duration), 
+                               step=1) # 精度提高到1秒
         
-        if st.button("Generate Remix"):
-            tl = st.session_state.remixer.generate_path(target_dur)
+        if st.button("Generate Remix", type="primary"):
+            tl, actual_dur = st.session_state.remixer.plan_multi_loop_remix(target_dur)
             st.session_state.timeline = tl
+            
+            with st.spinner("Rendering..."):
+                audio = st.session_state.remixer.render_remix(tl)
+                if len(audio) > 0:
+                    mx = np.max(np.abs(audio))
+                    if mx > 0: audio = audio / mx * 0.95
+                
+                st.session_state.final_audio = audio
+                st.session_state.final_dur = actual_dur
 
-# Main
+# --- Main ---
 if st.session_state.remixer and st.session_state.timeline:
     tl = st.session_state.timeline
-    remixer = st.session_state.remixer
-    final_dur = sum(s['duration'] for s in tl)
     
-    st.subheader("🔗 Remix Map")
-    st.info(f"Original: {remixer.duration:.1f}s | Target: {target_dur}s | Actual: {final_dur:.1f}s")
-    
-    fig = plot_connection_map(remixer.y, remixer.sr, tl, final_dur)
+    st.subheader("Structure")
+    fig = plot_structure(
+        st.session_state.remixer.y, 
+        st.session_state.remixer.sr, 
+        tl, 
+        st.session_state.final_dur
+    )
     st.pyplot(fig)
     
-    st.subheader("🎧 Final Audio")
-    if st.button("▶️ Render"):
-        with st.spinner("Rendering..."):
-            audio = remixer.render(tl)
-            if np.max(np.abs(audio)) > 0: audio = audio / np.max(np.abs(audio)) * 0.95
-            
-            buf = io.BytesIO()
-            sf.write(buf, audio, remixer.sr, format='WAV')
-            st.audio(buf.getvalue(), format='audio/wav')
-            st.download_button("Download WAV", buf, "remix.wav")
+    st.divider()
+    
+    st.subheader("Result")
+    c1, c2 = st.columns(2)
+    c1.info(f"Target: {target_dur}s")
+    c2.success(f"Actual: {st.session_state.final_dur:.1f}s")
+    
+    if st.session_state.final_audio is not None:
+        buf = io.BytesIO()
+        sf.write(buf, st.session_state.final_audio, st.session_state.remixer.sr, format='WAV')
+        st.audio(buf.getvalue(), format='audio/wav')
+        st.download_button("Download Remix", buf, "remix.wav")
 
 elif not uploaded_file:
-    st.info("Please upload a file.")
+    st.info("👋 Upload audio to start.")
