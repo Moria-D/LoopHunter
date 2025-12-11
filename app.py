@@ -12,10 +12,34 @@ from division import AudioRemixer
 
 st.set_page_config(layout="wide", page_title="LoopHunter - Final UI")
 
+# --- CSS 注入：核心布局调整 ---
 st.markdown("""
 <style>
     .main { background-color: #0d1117; }
-    .stButton>button { width: 100%; border-radius: 6px; font-weight: 600; }
+    
+    /* 1. 精确调整上传组件布局 */
+    /* 目标：Label (Top) -> File List (Middle) -> Dropzone (Bottom) */
+    
+    /* 找到包含 dropzone 和 file list 的内部容器 */
+    [data-testid="stFileUploader"] > div > div {
+        display: flex;
+        flex-direction: column-reverse;
+    }
+    
+    /* 调整 Dropzone (Browse Button) 的样式，使其在底部时看起来协调 */
+    [data-testid="stFileUploader"] section[data-testid="stFileUploadDropzone"] {
+        margin-top: 10px;
+    }
+    
+    /* 2. 优化按钮样式 */
+    .stButton > button {
+        width: 100%;
+        border-radius: 8px;
+        font-weight: 600;
+        height: 3rem; /* 增加按钮高度 */
+        margin-top: 5px;
+    }
+    
     /* 播放器容器样式 */
     .audio-player-box {
         background-color: #161b22;
@@ -24,9 +48,12 @@ st.markdown("""
         padding: 15px;
         margin-bottom: 10px;
     }
+    
+    /* 数字输入框居中 */
     div[data-testid="stNumberInput"] input {
         text-align: center;
     }
+    
     h1, h2, h3, p, label { color: #c9d1d9; }
 </style>
 """, unsafe_allow_html=True)
@@ -43,52 +70,35 @@ if 'loop_page' not in st.session_state: st.session_state.loop_page = 0
 # ----------------- PLOT FUNCTIONS -----------------
 
 def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
-    """
-    绘制长条形波形图：背景灰色，Loop区域波形高亮为亮蓝色
-    """
+    """绘制长条形波形图"""
     fig, ax = plt.subplots(figsize=(10, 1.2)) 
     fig.patch.set_facecolor('#161b22')
     ax.set_facecolor('#161b22')
     
-    # 降采样加速绘图 (Step=100)
     step = 100
     y_subs = y[::step]
     sr_subs = sr / step
     
-    # 1. 绘制全曲背景 (深灰色)
-    librosa.display.waveshow(y_subs, sr=sr_subs, ax=ax, color='#444444', alpha=0.5)
+    librosa.display.waveshow(y_subs, sr=sr_subs, ax=ax, color='#444', alpha=0.4)
     
-    # 2. 绘制 Loop 区域波形 (亮蓝色)
-    # 计算 Loop 在降采样后的索引范围
+    # Highlight
     s_idx = int(loop_start * sr / step)
     e_idx = int(loop_end * sr / step)
     
-    # 提取 Loop 区域的数据
-    # 为了保持时间轴对齐，我们需要创建一个全长的 masked array，或者只画那一小段
-    # 这里选择简单方法：只画那一小段，但通过 offset 参数定位
-    
     if e_idx > s_idx:
-        loop_chunk = y_subs[s_idx:e_idx]
-        # 创建一个与 y_subs 等长的时间轴数组
         times = np.arange(len(y_subs)) / sr_subs
         loop_times = times[s_idx:e_idx]
+        loop_chunk = y_subs[s_idx:e_idx]
+        ax.plot(loop_times, loop_chunk, color='#3b82f6', linewidth=0.8, alpha=0.9) 
         
-        # 使用 fill_between 或 plot 来绘制高亮波形
-        # librosa waveshow 内部也是调用的 matplotlib，我们手动画这一段
-        ax.plot(loop_times, loop_chunk, color='#3b82f6', linewidth=0.8, alpha=0.9) # Bright Blue
-        
-        # 可选：加一个非常淡的背景框增强可见度
         rect = patches.Rectangle((loop_start, -1), loop_end - loop_start, 2, 
                                  facecolor='#1f6feb', alpha=0.15, edgecolor=None)
         ax.add_patch(rect)
     
     ax.set_yticks([])
     ax.set_xticks([])
-    # 设置 X 轴范围与全曲一致
     ax.set_xlim(0, len(y_subs)/sr_subs)
-    
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    for spine in ax.spines.values(): spine.set_visible(False)
         
     plt.tight_layout(pad=0)
     return fig
@@ -133,11 +143,17 @@ def plot_remix_structure(timeline, total_remix_dur):
 # ----------------- SIDEBAR -----------------
 with st.sidebar:
     st.header("1. Upload")
+    
+    # 上传组件
     uploaded_file = st.file_uploader("Audio", type=["mp3", "wav"])
     
+    # 按钮逻辑优化
     if uploaded_file:
-        if st.button("Analyze"):
-            with st.spinner("Scanning for loops..."):
+        st.write("") # Spacer
+        
+        # Analyze 按钮
+        if st.button("🚀 Analyze Audio", type="primary", use_container_width=True):
+            with st.spinner("Scanning structure & loops..."):
                 suffix = ".mp3" if uploaded_file.name.endswith(".mp3") else ".wav"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tfile:
                     tfile.write(uploaded_file.read())
@@ -168,7 +184,8 @@ with st.sidebar:
                                value=int(duration), 
                                step=1)
         
-        if st.button("Generate Remix", type="primary"):
+        st.write("")
+        if st.button("✨ Generate Remix", type="primary", use_container_width=True):
             tl, actual_dur = st.session_state.remixer.plan_multi_loop_remix(target_dur)
             st.session_state.timeline = tl
             
@@ -213,7 +230,6 @@ if st.session_state.remixer:
                         st.session_state[f'audio_{i}'] = buf.getvalue()
                 
                 with c2:
-                    # 使用新的绘图函数
                     fig = plot_mini_waveform_with_highlight(remixer.y, remixer.sr, loop['start'], loop['end'])
                     st.pyplot(fig)
                     
@@ -227,7 +243,6 @@ if st.session_state.remixer:
                 
                 st.markdown("<hr style='margin: 5px 0; opacity: 0.2;'>", unsafe_allow_html=True)
         
-        # Pagination Controls
         col_prev, col_input, col_next = st.columns([1, 2, 1])
         
         with col_prev:
@@ -277,7 +292,7 @@ if st.session_state.remixer:
             buf = io.BytesIO()
             sf.write(buf, st.session_state.final_audio, st.session_state.remixer.sr, format='WAV')
             st.audio(buf.getvalue(), format='audio/wav')
-            st.download_button("Download Remix WAV", buf, "remix.wav")
+            st.download_button("Download Remix WAV", buf, "remix.wav", type="primary", use_container_width=True)
 
 elif not uploaded_file:
     st.info("👋 Upload an audio file to start.")
