@@ -2,6 +2,7 @@ import librosa
 import numpy as np
 import warnings
 import random
+import json
 from scipy.ndimage import median_filter
 from scipy.spatial.distance import cdist
 
@@ -24,7 +25,7 @@ class AudioRemixer:
 
     def _refine_cut_point(self, time_sec, search_window_ms=50):
         """
-        [关键优化] 微调切点：瞬态回溯 + 过零点锁定
+        [微调切点] 瞬态回溯 + 过零点锁定
         """
         center_sample = int(time_sec * self.sr)
         search_samples = int((search_window_ms / 1000) * self.sr)
@@ -83,7 +84,6 @@ class AudioRemixer:
         mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
         features = np.vstack([chroma_sync, mfcc_sync])
         
-        # [修复] 保存特征用于缩短算法
         self.beat_features = features.T
         
         # Shingling & Recurrence
@@ -116,15 +116,53 @@ class AudioRemixer:
                             if abs(l['start'] - time_start) < 1.0 and abs(l['end'] - time_end) < 1.0:
                                 is_dup = True; break
                         if not is_dup:
+                            # 简单的类型推断 (基于能量和频段)
+                            # 这里做一个简化的伪分类，实际需要更复杂的模型
+                            loop_type = "melody"
+                            if lag < 16: loop_type = "beats"
+                            elif lag > 64: loop_type = "climax"
+                            
                             self.loops.append({
                                 "start": time_start,
                                 "end": time_end,
                                 "duration": time_end - time_start,
                                 "score": np.mean(diag[seg]),
                                 "beats_len": lag,
-                                "type": "loop"
+                                "type": loop_type
                             })
         self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
+
+    def export_analysis_data(self, source_filename="audio.wav"):
+        """
+        [NEW] 生成分析报告文档
+        """
+        looping_points = []
+        
+        for loop in self.loops:
+            looping_points.append({
+                "duration": round(loop['duration'], 2),
+                "start_position": round(loop['start'], 2),
+                "type": loop['type'], # beats, melody, climax
+                "confidence": round(loop['score'], 2)
+            })
+            
+        raw_data = {
+            "source_music": source_filename,
+            "total_duration": round(self.duration, 2),
+            "looping_points": looping_points
+        }
+        
+        # 生成用户友好文本 (全部输出，不省略)
+        lines = [f"Analysis Report for: {source_filename}"]
+        lines.append(f"Total Duration: {self.duration:.2f}s")
+        lines.append(f"Total Loops Found: {len(self.loops)}")
+        lines.append("-" * 40)
+        
+        # 使用 enumerate 遍历所有 loops
+        for i, pt in enumerate(looping_points): 
+            lines.append(f"Loop #{i+1:02d}: Start {pt['start_position']:6.2f}s | Dur {pt['duration']:5.2f}s | Type: {pt['type']}")
+            
+        return raw_data, "\n".join(lines)
 
     def generate_loop_preview(self, loop_data, repetitions=4):
         """生成预览音频"""
@@ -171,60 +209,43 @@ class AudioRemixer:
         return sorted(selected_loops, key=lambda x: x['start'])
 
     def _find_best_cut_points(self, target_duration):
-        """
-        [修复] 找回缩短逻辑：弹性搜索最佳缝合点
-        """
+        """弹性搜索最佳缝合点"""
         n_beats = len(self.beat_times)
         remove_amount = self.duration - target_duration
-        
         best_score = -999.0
         best_cut = None 
-        
         min_idx = 4
         max_idx = n_beats - 4
-        
-        # 听感优先配置
         time_tolerance = 5.0 if target_duration <= 30 else 3.0
         time_penalty_weight = 0.02 
         
         for i in range(min_idx, max_idx):
             time_a = self.beat_times[i]
-            
             ideal_time_b = time_a + remove_amount
             if ideal_time_b >= self.beat_times[max_idx]: break
-                
             j_approx = np.searchsorted(self.beat_times, ideal_time_b)
             search_window_beats = int(time_tolerance * 2)
-            
             start_j = max(i + 8, j_approx - search_window_beats)
             end_j = min(n_beats - 4, j_approx + search_window_beats)
-            
             if start_j >= end_j: continue
             
             feat_a = self.beat_features[i].reshape(1, -1)
             feats_candidates = self.beat_features[start_j:end_j]
-            
             dists = cdist(feat_a, feats_candidates, metric='cosine')[0]
             sims = 1.0 - dists
-            
             candidate_times = self.beat_times[start_j:end_j]
             est_durations = time_a + (self.duration - candidate_times)
             time_errors = np.abs(est_durations - target_duration)
-            
             final_scores = sims - (time_errors * time_penalty_weight)
-            
             local_best_idx = np.argmax(final_scores)
             local_best_score = final_scores[local_best_idx]
-            
             if local_best_score > best_score:
                 best_score = local_best_score
                 real_j = start_j + local_best_idx
                 best_cut = (i, real_j)
-        
         return best_cut, best_score
 
     def _plan_hard_cut(self, target):
-        """[修复] 找回硬切保底逻辑"""
         cut = target / 2
         return [
             {"source_start":0, "source_end":cut, "duration":cut, "type":"Head", "remix_start":0, "refine_end": True},
@@ -232,71 +253,33 @@ class AudioRemixer:
         ]
 
     def plan_multi_loop_remix(self, target_duration):
-        """
-        高级路径规划：支持延长 (Loop Back) 和 缩短 (Skip Forward)
-        """
-        # ==========================================
-        # 1. 缩短模式 (Target < Original) - [修复] 找回丢失的分支
-        # ==========================================
         if target_duration < self.duration:
             if target_duration < 5.0:
                 return self._plan_hard_cut(target_duration), target_duration
-
             cut_indices, score = self._find_best_cut_points(target_duration)
-            
             timeline = []
             if cut_indices:
                 idx_a, idx_b = cut_indices
                 time_a = self.beat_times[idx_a]
                 time_b = self.beat_times[idx_b]
-                
-                # Head (0 -> A)
-                timeline.append({
-                    "source_start": 0.0,
-                    "source_end": time_a,
-                    "duration": time_a,
-                    "type": "Head",
-                    "xfade": 0,
-                    "remix_start": 0.0,
-                    "refine_end": True # 开启微调
-                })
-                
-                # Tail (B -> End)
+                timeline.append({"source_start": 0.0, "source_end": time_a, "duration": time_a, "type": "Head", "xfade": 0, "remix_start": 0.0, "refine_end": True})
                 tail_dur = self.duration - time_b
-                timeline.append({
-                    "source_start": time_b,
-                    "source_end": self.duration,
-                    "duration": tail_dur,
-                    "type": "Tail",
-                    "xfade": 30, # 缝合点 Fade
-                    "remix_start": time_a,
-                    "is_jump": True,
-                    "refine_start": True # 开启微调
-                })
-                
-                actual_dur = time_a + tail_dur
-                return timeline, actual_dur
+                timeline.append({"source_start": time_b, "source_end": self.duration, "duration": tail_dur, "type": "Tail", "xfade": 30, "remix_start": time_a, "is_jump": True, "refine_start": True})
+                return timeline, time_a + tail_dur
             else:
                 return self._plan_hard_cut(target_duration), target_duration
-
-        # ==========================================
-        # 2. 延长模式 (Target > Original)
-        # ==========================================
         else:
-            if not self.loops: return None, 0
-            
+            if not self.loops:
+                return [{"source_start":0, "source_end":self.duration, "duration":self.duration, "type":"Original", "remix_start":0}], self.duration
             active_loops = self._filter_loops()
             if not active_loops:
                 active_loops = [self.loops[0]]
                 active_loops[0]['repeats'] = 0
-
             current_total = self.duration
             time_diff = target_duration - current_total
-            
             if time_diff > 0:
                 while time_diff > 0:
-                    best_idx = -1
-                    best_score = -1
+                    best_idx = -1; best_score = -1
                     for i, loop in enumerate(active_loops):
                         penalty = 1.0 / (loop['repeats'] + 1)
                         w_score = loop['score'] * penalty * loop['duration']
@@ -306,89 +289,41 @@ class AudioRemixer:
                         active_loops[best_idx]['repeats'] += 1
                         time_diff -= active_loops[best_idx]['duration']
                     else: break
-
             timeline = []
             cursor = 0.0      
             source_cursor = 0.0
-            
             for loop in active_loops:
-                # A. Linear part
                 if source_cursor < loop['end']:
                     seg_dur = loop['end'] - source_cursor
-                    timeline.append({
-                        "source_start": source_cursor,
-                        "source_end": loop['end'],
-                        "duration": seg_dur,
-                        "type": "Linear",
-                        "xfade": 0,
-                        "remix_start": cursor,
-                        "refine_start": True if len(timeline)>0 else False,
-                        "refine_end": True 
-                    })
+                    timeline.append({"source_start": source_cursor, "source_end": loop['end'], "duration": seg_dur, "type": "Linear", "xfade": 0, "remix_start": cursor, "refine_start": True if len(timeline)>0 else False, "refine_end": True})
                     cursor += seg_dur
                     source_cursor = loop['end']
-                
-                # B. Loop Extension
                 if loop['repeats'] > 0:
                     for i in range(loop['repeats']):
-                        timeline.append({
-                            "source_start": loop['start'],
-                            "source_end": loop['end'],
-                            "duration": loop['duration'],
-                            "type": "Loop Extension",
-                            "xfade": 25,
-                            "remix_start": cursor,
-                            "loop_id": loop.get('start'),
-                            "refine_start": True,
-                            "refine_end": True
-                        })
+                        timeline.append({"source_start": loop['start'], "source_end": loop['end'], "duration": loop['duration'], "type": "Loop Extension", "xfade": 25, "remix_start": cursor, "loop_id": loop.get('start'), "refine_start": True, "refine_end": True})
                         cursor += loop['duration']
-            
-            # C. Outro
             if source_cursor < self.duration:
-                timeline.append({
-                    "source_start": source_cursor,
-                    "source_end": self.duration,
-                    "duration": self.duration - source_cursor,
-                    "type": "Outro",
-                    "xfade": 0,
-                    "remix_start": cursor,
-                    "refine_start": True,
-                    "refine_end": False
-                })
+                timeline.append({"source_start": source_cursor, "source_end": self.duration, "duration": self.duration - source_cursor, "type": "Outro", "xfade": 0, "remix_start": cursor, "refine_start": True, "refine_end": False})
                 cursor += (self.duration - source_cursor)
-                
             return timeline, cursor
 
     def render_remix(self, timeline):
         if not timeline: return np.array([])
-        
         total_samples = int(sum([s['duration'] for s in timeline]) * self.sr)
-        output = np.zeros(total_samples + 44100) # Buffer
+        output = np.zeros(total_samples + 44100)
         cursor = 0
-        
         for i, seg in enumerate(timeline):
             s_time = seg['source_start']
             e_time = seg['source_end']
-            
-            if seg.get('refine_start', False):
-                s_idx = self._refine_cut_point(s_time)
-            else:
-                s_idx = int(s_time * self.sr)
-                
-            if seg.get('refine_end', False):
-                e_idx = self._refine_cut_point(e_time)
-            else:
-                e_idx = int(e_time * self.sr)
-                
+            if seg.get('refine_start', False): s_idx = self._refine_cut_point(s_time)
+            else: s_idx = int(s_time * self.sr)
+            if seg.get('refine_end', False): e_idx = self._refine_cut_point(e_time)
+            else: e_idx = int(e_time * self.sr)
             if s_idx >= e_idx: continue
             if e_idx > len(self.y): e_idx = len(self.y)
-            
             chunk = self.y[s_idx:e_idx]
-            
             fade_ms = seg.get('xfade', 0)
             fade_len = int((fade_ms / 1000) * self.sr)
-            
             if i == 0 or fade_len == 0:
                 output[cursor:cursor+len(chunk)] = chunk
                 cursor += len(chunk)
@@ -398,15 +333,10 @@ class AudioRemixer:
                 prev = output[overlap:cursor]
                 curr = chunk[:fade_len]
                 n = min(len(prev), len(curr))
-                
                 if n > 1:
                     lin = np.linspace(0, 1, n)
-                    w_in = np.sin(lin * np.pi / 2)
-                    w_out = np.cos(lin * np.pi / 2)
-                    mix = prev*w_out + curr*w_in
+                    mix = prev*(1-lin) + curr*lin
                     output[overlap:overlap+n] = mix
-                
                 output[cursor:cursor+len(chunk)-fade_len] = chunk[fade_len:]
                 cursor += len(chunk) - fade_len
-                
         return output[:cursor]
