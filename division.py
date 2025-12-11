@@ -1,98 +1,12 @@
 import librosa
 import numpy as np
-import json
-from sklearn.metrics.pairwise import cosine_similarity
 import warnings
 import random
+from scipy.ndimage import median_filter
 
-# 忽略不必要的警告
 warnings.filterwarnings('ignore')
 
-def snap_to_zero_crossing(y, idx, search_window=100):
-    """
-    修正时间点到最近的过零点，防止硬切爆音
-    """
-    if idx < 0: idx = 0
-    if idx >= len(y): idx = len(y) - 1
-    
-    start = max(0, int(idx - search_window))
-    end = min(len(y), int(idx + search_window))
-    
-    if end <= start:
-        return idx
-
-    local_min_idx = np.argmin(np.abs(y[start:end]))
-    return start + local_min_idx
-
-def compute_transition_score(y, sr, end_time_a, start_time_b):
-    """
-    计算两个 Loop 连接处的平滑度 (A的尾部 -> B的头部)
-    """
-    win_size = int(0.05 * sr) # 50ms 窗口用于检测瞬态接缝
-    try:
-        idx_a = int(end_time_a * sr)
-        idx_b = int(start_time_b * sr)
-        
-        if idx_a < win_size or idx_b + win_size > len(y): return 0.0
-        
-        tail_a = y[idx_a - win_size : idx_a]
-        head_b = y[idx_b : idx_b + win_size]
-        
-        # 1. 能量连续性
-        rms_a = np.sqrt(np.mean(tail_a**2))
-        rms_b = np.sqrt(np.mean(head_b**2))
-        rms_diff = abs(rms_a - rms_b) / (max(rms_a, rms_b) + 1e-6)
-        energy_score = 1.0 - min(rms_diff, 1.0)
-        
-        # 2. 频谱连续性
-        spec_a = np.abs(librosa.stft(tail_a, n_fft=512))
-        spec_b = np.abs(librosa.stft(head_b, n_fft=512))
-        spec_dist = np.linalg.norm(np.mean(spec_a, axis=1) - np.mean(spec_b, axis=1))
-        spec_score = 1.0 / (1.0 + spec_dist * 10)
-
-        return 0.4 * energy_score + 0.6 * spec_score
-    except:
-        return 0.0
-
-def get_optimal_xfade(y, sr, end_time_a, start_time_b, type_a, type_b):
-    """
-    根据音频内容和Loop类型，计算最佳的 Crossfade 时长 (ms)
-    """
-    # 默认值
-    default_xfade = 30 # ms
-    
-    # 规则 1: 打击乐密集区域 -> 短淡化，防止双重击打 (Flamming)
-    percussive_types = ['chorus', 'verse', 'beats']
-    if type_a in percussive_types or type_b in percussive_types:
-        return 15 # 15ms is tight enough for beats
-        
-    # 规则 2: 氛围/旋律 -> 长淡化，保证平滑
-    ambient_types = ['intro', 'outro', 'breakdown', 'melody']
-    if type_a in ambient_types and type_b in ambient_types:
-        return 100 # 100ms for smooth pad transition
-        
-    # 规则 3: 检测瞬态密度 (高级)
-    # 简单实现：检查接缝处的瞬态
-    try:
-        win_size = int(0.1 * sr)
-        idx_a = int(end_time_a * sr)
-        idx_b = int(start_time_b * sr)
-        
-        # 提取接缝音频
-        segment = np.concatenate((
-            y[max(0, idx_a-win_size):idx_a], 
-            y[idx_b:min(len(y), idx_b+win_size)]
-        ))
-        
-        onset_env = librosa.onset.onset_strength(y=segment, sr=sr)
-        if np.mean(onset_env) > 1.0: # 高瞬态
-            return 10
-    except:
-        pass
-        
-    return default_xfade
-
-class LoopHunter:
+class AudioRemixer:
     def __init__(self, audio_path, sr=22050):
         self.path = audio_path
         self.sr = sr
@@ -100,302 +14,175 @@ class LoopHunter:
         self.y, self.sr = librosa.load(audio_path, sr=sr)
         self.duration = librosa.get_duration(y=self.y, sr=self.sr)
         
-        # 特征缓存
-        self.chroma_sync = None
-        self.rms_sync = None
-        self.cent_sync = None
+        self.beats = None
         self.beat_times = None
-        self.downbeats = [] 
+        self.loops = [] # 存储找到的 infinite loops
 
-    def _preprocess(self):
-        """核心预处理"""
-        print("Preprocessing audio...")
-        y_harmonic, y_percussive = librosa.effects.hpss(self.y)
+    def analyze(self):
+        """
+        使用 Beat-Synchronous Shingling 技术寻找无限循环点
+        """
+        print("Analyzing Beat Structure...")
         
-        # 1. 节拍追踪
+        # 1. 提取源分离增强的节拍
+        y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         tempo, beat_frames = librosa.beat.beat_track(y=y_percussive, sr=self.sr)
+        
+        # 确保 beat_frames 有效
+        if len(beat_frames) < 16:
+            # 如果节拍太少，强制按固定时间间隔生成
+            beat_frames = np.linspace(0, len(self.y), int(self.duration * 2), dtype=int)
+            
         self.beat_times = librosa.frames_to_time(beat_frames, sr=self.sr)
         
-        # 2. 计算同步特征
+        # 2. 提取特征 (Chroma + MFCC)
+        # Chroma 捕捉和声/旋律 (Harmonic)
         chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=self.sr)
-        rms = librosa.feature.rms(y=self.y)
+        # MFCC 捕捉音色/鼓点 (Percussive)
+        mfcc = librosa.feature.mfcc(y=y_percussive, sr=self.sr, n_mfcc=13)
         
-        # 保持二维 (1, T) 结构
-        spec_cent = librosa.feature.spectral_centroid(y=self.y) 
+        # 3. 节拍同步 (Beat Synchronization) - 关键步骤
+        # 将特征压缩到 Beat 维度，消除微小的节奏偏差
+        chroma_sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
+        mfcc_sync = librosa.util.sync(mfcc, beat_frames, aggregate=np.median)
         
-        # 将特征压缩到节拍网格上
-        self.chroma_sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
-        self.rms_sync = librosa.util.sync(rms, beat_frames, aggregate=np.median)
-        self.cent_sync = librosa.util.sync(spec_cent, beat_frames, aggregate=np.median)
-
-        # 3. Downbeat (第一拍) 估算
-        n_beats = len(self.beat_times)
-        best_offset = 0
-        max_energy = 0
+        # 归一化并堆叠
+        chroma_sync = librosa.util.normalize(chroma_sync, axis=1)
+        mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
+        features = np.vstack([chroma_sync, mfcc_sync])
         
-        for offset in range(4):
-            indices = range(offset, n_beats, 4)
-            if len(indices) > 0:
-                avg_energy = np.mean(self.rms_sync[0, indices])
-                if avg_energy > max_energy:
-                    max_energy = avg_energy
-                    best_offset = offset
+        # 4. 特征堆叠 (Shingling) - 核心魔法
+        # 我们不只比较单拍，而是比较 "4拍的序列"
+        # 这样能保证 Loop 不仅仅是音高一样，而是乐句走向一样
+        stack_size = 4 
+        features_stacked = librosa.feature.stack_memory(features, n_steps=stack_size, delay=1)
         
-        self.downbeats = set(range(best_offset, n_beats, 4))
-        print(f"Estimated Downbeat Offset: {best_offset}")
-
-    def find_loops(self):
-        if self.chroma_sync is None:
-            self._preprocess()
-            
-        candidates = []
-        # 安全获取总节拍数，取特征长度和时间戳长度的最小值
-        n_beats = min(self.chroma_sync.shape[1], len(self.beat_times))
+        # 5. 计算自相似矩阵 (Recurrence Matrix)
+        # 这里的 R[i, j] 表示：第 i 个 beat 和 第 j 个 beat 周围的音乐有多像
+        R = librosa.segment.recurrence_matrix(features_stacked, width=3, mode='affinity', sym=True)
         
-        valid_starts = sorted(list(self.downbeats))
+        # 6. 提取对角线 (寻找 Loop)
+        self.loops = []
+        n_beats = R.shape[0]
         
-        for i in valid_starts:
-            for length_beats in [16, 32]: 
-                j = i + length_beats
-                
-                # 如果 j 超过了 n_beats，说明这个 loop 超出了歌曲长度，跳过
-                if j > n_beats: continue
-                
-                # --- A. 类型判定 ---
-                # 切片 [i:j] 是安全的，即使 j == n_beats
-                rms_chunk = self.rms_sync[0, i:j]
-                cent_chunk = self.cent_sync[0, i:j]
-                
-                if len(rms_chunk) == 0: continue # 防止空切片
-                
-                avg_rms = np.mean(rms_chunk)
-                avg_cent = np.mean(cent_chunk)
-                global_rms = np.mean(self.rms_sync)
-                global_cent = np.mean(self.cent_sync)
-                
-                l_type = "verse"
-                
-                if avg_rms > global_rms * 1.15 and avg_cent > global_cent * 1.05:
-                    l_type = "chorus"
-                elif avg_rms < global_rms * 0.65:
-                    l_type = "breakdown"
-                elif avg_rms > global_rms * 0.9:
-                    l_type = "melody"
-                
-                t_start = self.beat_times[i]
-                if t_start < self.duration * 0.15 and avg_rms < global_rms:
-                    l_type = "intro"
-                elif t_start > self.duration * 0.85:
-                    l_type = "outro"
-
-                # --- B. 评分系统 ---
-                score = 0.5 
-                
-                std_rms = np.std(rms_chunk)
-                stability = 1.0 - np.clip(std_rms / global_rms, 0, 1)
-                score += stability * 0.2
-                
-                # 计算相似度
-                # 注意边界检查: j 必须小于特征矩阵宽度才能取列向量
-                # 如果 j == n_beats，我们取最后一帧近似
-                idx_end_feat = min(j, self.chroma_sync.shape[1] - 1)
-                
-                chroma_start = self.chroma_sync[:, i]
-                chroma_end = self.chroma_sync[:, idx_end_feat]
-                
-                sim = 1 - cosine_similarity(chroma_start.reshape(1, -1), chroma_end.reshape(1, -1))[0][0]
-                loop_fidelity = max(0, 1 - sim) 
-                score += loop_fidelity * 0.3
-
-                # [FIXED] 越界安全处理：获取结束时间 t_end
-                if j < len(self.beat_times):
-                    t_end = self.beat_times[j]
-                else:
-                    # 如果 j 刚好是长度（越界），说明 Loop 结束在歌曲末尾
-                    t_end = self.duration
-                
-                t_start_adj = max(0, t_start - 0.02)
-                t_end_adj = max(0, t_end - 0.02)
-                
-                trans_score = compute_transition_score(self.y, self.sr, t_end_adj, t_start_adj)
-                score += trans_score * 0.5 
-                
-                candidates.append({
-                    "start_position": round(t_start_adj, 3),
-                    "duration": round(t_end_adj - t_start_adj, 3),
-                    "type": l_type,
-                    "score": round(score, 3),
-                    "bars": length_beats / 4
-                })
-
-        # --- C. 去重 ---
-        candidates.sort(key=lambda x: x['score'], reverse=True)
-        final_loops = []
-        for cand in candidates:
-            is_overlap = False
-            for exist in final_loops:
-                s1, e1 = cand['start_position'], cand['start_position'] + cand['duration']
-                s2, e2 = exist['start_position'], exist['start_position'] + exist['duration']
-                
-                overlap = max(0, min(e1, e2) - max(s1, s2))
-                if overlap > 0.4 * min(cand['duration'], exist['duration']):
-                    is_overlap = True
-                    break
-            if not is_overlap:
-                final_loops.append(cand)
+        # 动态阈值策略：从高分开始找，如果找不到就降低要求
+        thresholds = [0.85, 0.75, 0.65, 0.55] 
         
-        final_loops.sort(key=lambda x: x['start_position'])
-        return final_loops
-
-    def generate_remixes(self, target_duration, top_n=3):
-        loops = self.find_loops()
-        if not loops: return []
-
-        pool = {
-            "intro": [l for l in loops if l['type'] == 'intro'],
-            "verse": [l for l in loops if l['type'] in ['melody', 'verse']],
-            "build": [l for l in loops if l['type'] in ['breakdown', 'melody']],
-            "chorus": [l for l in loops if l['type'] == 'chorus'],
-            "outro": [l for l in loops if l['type'] == 'outro']
-        }
-        
-        # Fallback: if empty, use general pool
-        all_l = loops
-        for k in pool:
-            if not pool[k]: pool[k] = all_l
-
-        remixes = []
-        for i in range(top_n):
-            timeline = []
-            curr_dur = 0.0
+        for thresh in thresholds:
+            if len(self.loops) > 50: break # 如果已经找到足够多的 loop，停止
             
-            # 严格的结构规划：强制 Intro -> Climax -> Outro
-            # 动态调整中间段落数量以匹配 target_duration
-            
-            # Step 1: 必须有 Intro 和 Outro
-            intro_loop = random.choice(pool['intro'])
-            outro_loop = random.choice(pool['outro'])
-            
-            # Step 2: 必须有至少一个 Climax (Chorus)
-            chorus_loop = random.choice(pool['chorus'])
-            
-            # Step 3: 填充剩余时间
-            # 初步估算已占用时间
-            essential_dur = intro_loop['duration'] + outro_loop['duration'] + chorus_loop['duration']
-            remaining = target_duration - essential_dur
-            
-            middle_structure = []
-            
-            # 如果还有很多时间，加 Verse 和 Build
-            if remaining > 15:
-                middle_structure.append(("verse", 1))
-                middle_structure.append(("build", 1))
-            elif remaining > 5:
-                 middle_structure.append(("verse", 1))
-                 
-            # 核心蓝图
-            blueprint = [("intro", 1)] + middle_structure + [("chorus", 1)] + [("outro", 1)]
-            
-            # 如果时间非常短，可能只需要 Intro -> Chorus -> Outro
-            if target_duration < 45:
-                 blueprint = [("intro", 1), ("chorus", 1), ("outro", 1)]
-
-            last_loop = None
-            
-            for section, count in blueprint:
-                candidates = pool[section]
-                if not candidates: candidates = all_l # Fallback
+            # 扫描对角线 (Lag)
+            # 限制最小 Loop 长度为 4 拍 (1小节)，最大为全曲的一半
+            for lag in range(4, n_beats // 2):
+                diag = np.diagonal(R, offset=lag)
                 
-                # 选择最佳 Loop (Transition Score)
-                best_cand = None
-                best_trans = -1
+                # 寻找连续的高分区域
+                # 使用中值滤波平滑，去除噪点
+                diag_smooth = median_filter(diag, size=3)
                 
-                # 随机采样一部分候选，避免每次都选一样的
-                sample = random.sample(candidates, min(len(candidates), 8))
+                high_sim_indices = np.where(diag_smooth > thresh)[0]
                 
-                if last_loop is None:
-                    best_cand = random.choice(sample)
-                else:
-                    for cand in sample:
-                        ts = compute_transition_score(
-                            self.y, self.sr, 
-                            last_loop['start_position'] + last_loop['duration'], 
-                            cand['start_position']
-                        )
-                        # 综合分数：平滑度 (70%) + 单体质量 (30%)
-                        total = ts * 0.7 + cand['score'] * 0.3
+                if len(high_sim_indices) == 0: continue
+                
+                # 合并连续段落
+                segments = np.split(high_sim_indices, np.where(np.diff(high_sim_indices) != 1)[0] + 1)
+                
+                for seg in segments:
+                    # 只有当相似长度超过 4 拍时才认为是一个稳固的 Loop
+                    if len(seg) >= 4:
+                        # 这是一个 Loop!
+                        # 原理：Beat[i] 和 Beat[i+lag] 很像
+                        # 意味着我们可以从 Beat[i+lag] 跳回 Beat[i] (Loop Back)
+                        # 或者从 Beat[i] 跳到 Beat[i+lag] (Skip Forward)
                         
-                        # 偏好：避免重复 Loop
-                        if cand == last_loop: total *= 0.5
+                        start_beat_idx = seg[0]
+                        end_beat_idx = seg[-1] # 匹配段落的结束
                         
-                        if total > best_trans:
-                            best_trans = total
-                            best_cand = cand
-                
-                if best_cand:
-                    # 计算 Crossfade
-                    xfade = 30 # Default
-                    if last_loop:
-                        xfade = get_optimal_xfade(
-                            self.y, self.sr, 
-                            last_loop['start_position'] + last_loop['duration'],
-                            best_cand['start_position'],
-                            last_loop['type'],
-                            best_cand['type']
-                        )
+                        # 转换回时间
+                        # Start of the segment
+                        t_start = self.beat_times[start_beat_idx]
+                        
+                        # Jump Point (Source) -> Landing Point (Target)
+                        # 我们记录的是一段“可循环区域”
+                        # Loop Start: 区域的开始
+                        # Loop End: 区域的结束
+                        # Jump: Loop End -> Loop Start
+                        
+                        # 在 Audjust 逻辑里，Loop 通常指：这段音乐本身是重复的
+                        # 也就是 Time A 和 Time B 是相似的。
+                        # 我们这里提取：从 t_start 开始，持续 length 秒的片段，是可以在内部循环的
+                        
+                        # 但为了更精准，我们定义 Loop 为一对跳转点：
+                        # Point A (Early) and Point B (Late)
+                        # 这里的 seg 代表了 A 和 B 的重合部分
+                        
+                        # Point A (Loop Start)
+                        idx_a = start_beat_idx
+                        # Point B (Loop End - where we jump back from)
+                        idx_b = start_beat_idx + lag
+                        
+                        if idx_b >= len(self.beat_times): continue
+                        
+                        time_a = self.beat_times[idx_a]
+                        time_b = self.beat_times[idx_b]
+                        
+                        # 质量分数
+                        score = np.mean(diag[seg])
+                        
+                        # 去重检查 (防止太多相似的)
+                        is_duplicate = False
+                        for existing in self.loops:
+                            if abs(existing['start'] - time_a) < 0.5 and abs(existing['end'] - time_b) < 0.5:
+                                is_duplicate = True
+                                break
+                        
+                        if not is_duplicate:
+                            self.loops.append({
+                                "start": time_a,      # Loop Point 1
+                                "end": time_b,        # Loop Point 2 (Jump back from here)
+                                "duration": time_b - time_a, # Loop Length
+                                "score": score,
+                                "beats_len": lag,
+                                "segment_len": len(seg) # 相似区域的稳固程度
+                            })
 
-                    timeline.append({
-                        "source_start": best_cand['start_position'],
-                        "source_end": best_cand['start_position'] + best_cand['duration'],
-                        "type": best_cand['type'],
-                        "duration": best_cand['duration'],
-                        "remix_start": round(curr_dur, 3),
-                        "remix_end": round(curr_dur + best_cand['duration'], 3),
-                        "xfade_ms": xfade 
-                    })
-                    curr_dur += best_cand['duration']
-                    last_loop = best_cand
-            
-            remixes.append({
-                "rank": i+1,
-                "timeline": timeline,
-                "total_score": round(random.uniform(0.85, 0.98), 2),
-                "actual_duration": round(curr_dur, 2)
-            })
-            
-        return remixes
+        # 按分数排序
+        self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
+        print(f"Found {len(self.loops)} candidate loops.")
 
-    def export_json(self):
-        # Ensure we have processed data
-        if not self.beat_times or len(self.beat_times) == 0:
-            self._preprocess()
-            
-        points = self.find_loops()
-        bpm = 120.0
-        if len(self.beat_times) > 1:
-            bpm = 60.0 / np.mean(np.diff(self.beat_times))
-            
-        output = {
-            "source_music": self.path,
-            "meta": {
-                "bpm": round(float(bpm), 1),
-                "total_duration": round(float(self.duration), 2)
-            },
-            "looping_points": points
-        }
+    def render_loop_preview(self, loop_data, repetitions=3):
+        """
+        生成 Loop 预览音频：A -> B -> A -> B ...
+        """
+        start_t = loop_data['start']
+        end_t = loop_data['end']
         
-        # Custom encoder for numpy types
-        class NumpyEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
-                                    np.int16, np.int32, np.int64, np.uint8,
-                                    np.uint16, np.uint32, np.uint64)):
-                    return int(obj)
-                elif isinstance(obj, (np.float16, np.float32, 
-                                    np.float64)):
-                    return float(obj)
-                elif isinstance(obj, (np.ndarray,)): 
-                    return obj.tolist()
-                return json.JSONEncoder.default(self, obj)
-
-        return json.dumps(output, indent=4, cls=NumpyEncoder)
+        s_idx = int(start_t * self.sr)
+        e_idx = int(end_t * self.sr)
+        
+        # 基础片段
+        segment = self.y[s_idx:e_idx]
+        
+        # 拼接
+        output = segment
+        
+        # 使用简单的 Crossfade 拼接
+        fade_len = int(0.03 * self.sr) # 30ms fade
+        
+        for _ in range(repetitions - 1):
+            if len(segment) < fade_len:
+                output = np.concatenate((output, segment))
+            else:
+                # Crossfade the end of output with start of segment
+                prev_tail = output[-fade_len:]
+                curr_head = segment[:fade_len]
+                
+                lin = np.linspace(0, 1, fade_len)
+                w_in = np.sin(lin * np.pi / 2)
+                w_out = np.cos(lin * np.pi / 2)
+                
+                overlap = prev_tail * w_out + curr_head * w_in
+                
+                output = np.concatenate((output[:-fade_len], overlap, segment[fade_len:]))
+                
+        return output
