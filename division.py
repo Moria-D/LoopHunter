@@ -20,12 +20,46 @@ class AudioRemixer:
         self.beat_features = None 
         self.loops = []
         
-        # 计算全局特征用于相对比较
+        # 初始计算 (Analyze 中会更新)
         self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
         self.global_rms = np.sqrt(np.mean(self.y**2))
 
+    def _trim_silence(self):
+        """
+        [找回] 预处理：切除尾部静音
+        这对时长控制至关重要，否则 Outro 会包含大量无效时间。
+        """
+        # 1. 计算短时能量
+        mse = librosa.feature.rms(y=self.y, frame_length=2048, hop_length=512)[0]
+        db = librosa.amplitude_to_db(mse, ref=np.max)
+        
+        # 2. 设定阈值
+        silence_thresh = -60
+        
+        # 3. 从后往前扫描
+        last_frame = len(db) - 1
+        for i in range(len(db)-1, 0, -1):
+            if db[i] > silence_thresh:
+                last_frame = i
+                break
+        
+        # 4. 转换并预留 0.5s 混响余量
+        last_sample = librosa.frames_to_samples(last_frame, hop_length=512)
+        padding = int(0.5 * self.sr) 
+        trim_end = min(len(self.y), last_sample + padding)
+        
+        # 5. 应用切除
+        if trim_end < len(self.y) - int(0.1 * self.sr):
+            print(f"Trimming silence: {self.duration:.2f}s -> {trim_end/self.sr:.2f}s")
+            self.y = self.y[:trim_end]
+            self.duration = trim_end / self.sr
+            
+            # [重要] 更新全局特征，确保后续分析准确
+            self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
+            self.global_rms = np.sqrt(np.mean(self.y**2))
+
     def _refine_cut_point(self, time_sec, search_window_ms=50):
-        """[微调切点] 瞬态回溯 + 过零点锁定"""
+        """[保留] 微调切点：瞬态回溯 + 过零点锁定"""
         center_sample = int(time_sec * self.sr)
         search_samples = int((search_window_ms / 1000) * self.sr)
         
@@ -34,7 +68,6 @@ class AudioRemixer:
         
         if start_search >= end_search: return center_sample
         
-        # 瞬态检测
         onset_frame_center = librosa.samples_to_frames(center_sample)
         search_frame_rad = librosa.samples_to_frames(search_samples)
         
@@ -49,7 +82,6 @@ class AudioRemixer:
         else:
             target_sample = center_sample
 
-        # 过零点锁定
         zc_window = 200
         z_start = max(0, target_sample - zc_window)
         z_end = min(len(self.y), target_sample + zc_window)
@@ -64,40 +96,28 @@ class AudioRemixer:
         return target_sample
 
     def _classify_segment(self, start_time, end_time):
-        """
-        [NEW] 基于音频特征动态分类 Loop 类型
-        """
+        """[找回] 基于音频特征动态分类 Loop 类型"""
         s_idx = int(start_time * self.sr)
         e_idx = int(end_time * self.sr)
         chunk = self.y[s_idx:e_idx]
         
         if len(chunk) == 0: return "melody"
         
-        # 1. 计算相对能量 (Relative Energy)
         chunk_rms = np.sqrt(np.mean(chunk**2))
         energy_ratio = chunk_rms / (self.global_rms + 1e-6)
-        
-        # 2. 计算过零率 (Zero Crossing Rate) - 衡量是否嘈杂/打击乐丰富
         zcr = np.mean(librosa.feature.zero_crossing_rate(chunk))
         
-        # 3. 逻辑判定
-        # 高能量 + 高频丰富 = Climax (高潮/副歌)
-        if energy_ratio > 1.1:
-            return "climax"
-        
-        # 低能量 = Atmosphere/Breakdown (但在 Loop 列表中我们统一归为 Melody)
-        if energy_ratio < 0.6:
-            return "atmosphere"
-            
-        # 中等能量 + 高过零率 = Beats (节奏为主)
-        if zcr > 0.08: # 经验阈值
-            return "beats"
-            
-        # 其他情况归为旋律
+        if energy_ratio > 1.1: return "climax"
+        if energy_ratio < 0.6: return "atmosphere"
+        if zcr > 0.08: return "beats"
         return "melody"
 
     def analyze(self):
         """分析音频结构"""
+        
+        # 1. [关键修复] 先执行静音切除
+        self._trim_silence()
+        
         y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         tempo, beat_frames = librosa.beat.beat_track(y=y_percussive, sr=self.sr)
         
@@ -106,7 +126,6 @@ class AudioRemixer:
             
         self.beat_times = librosa.frames_to_time(beat_frames, sr=self.sr)
         
-        # 特征提取
         chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=self.sr)
         mfcc = librosa.feature.mfcc(y=y_percussive, sr=self.sr, n_mfcc=13)
         chroma_sync = librosa.util.sync(chroma, beat_frames, aggregate=np.median)
@@ -115,9 +134,9 @@ class AudioRemixer:
         mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
         features = np.vstack([chroma_sync, mfcc_sync])
         
+        # 保存特征用于缩短算法
         self.beat_features = features.T
         
-        # Shingling & Recurrence
         stack_size = 4 
         features_stacked = librosa.feature.stack_memory(features, n_steps=stack_size, delay=1)
         R = librosa.segment.recurrence_matrix(features_stacked, width=3, mode='affinity', sym=True)
@@ -147,9 +166,8 @@ class AudioRemixer:
                             if abs(l['start'] - time_start) < 1.0 and abs(l['end'] - time_end) < 1.0:
                                 is_dup = True; break
                         if not is_dup:
-                            # [NEW] 使用新的特征分类方法
+                            # [关键修复] 调用分类器
                             loop_type = self._classify_segment(time_start, time_end)
-                            
                             self.loops.append({
                                 "start": time_start,
                                 "end": time_end,
@@ -163,7 +181,6 @@ class AudioRemixer:
     def export_analysis_data(self, source_filename="audio.wav"):
         """生成分析报告文档"""
         looping_points = []
-        
         for loop in self.loops:
             looping_points.append({
                 "duration": round(loop['duration'], 2),
@@ -171,13 +188,11 @@ class AudioRemixer:
                 "type": loop['type'], 
                 "confidence": round(loop['score'], 2)
             })
-            
         raw_data = {
             "source_music": source_filename,
             "total_duration": round(self.duration, 2),
             "looping_points": looping_points
         }
-        
         lines = []
         lines.append(f"========== AUDIO ANALYSIS REPORT ==========")
         lines.append(f"Source File : {source_filename}")
@@ -187,13 +202,10 @@ class AudioRemixer:
         lines.append("--- DETAILED LOOP POINTS ---")
         lines.append(f"{'#':<4} | {'Start':<9} | {'Dur':<8} | {'Type':<10} | {'Conf':<6}")
         lines.append("-" * 50)
-        
         for i, pt in enumerate(looping_points):
             lines.append(f"#{i+1:02d}  | {pt['start_position']:6.2f}s  | {pt['duration']:5.2f}s  | {pt['type'].upper():<10} | {pt['confidence']:.2f}")
-            
         lines.append("")
         lines.append("========== END OF REPORT ==========")
-            
         return raw_data, "\n".join(lines)
 
     def generate_loop_preview(self, loop_data, repetitions=4):
@@ -241,12 +253,15 @@ class AudioRemixer:
         return sorted(selected_loops, key=lambda x: x['start'])
 
     def _find_best_cut_points(self, target_duration):
+        """弹性搜索最佳缝合点"""
         n_beats = len(self.beat_times)
         remove_amount = self.duration - target_duration
         best_score = -999.0
         best_cut = None 
         min_idx = 4
         max_idx = n_beats - 4
+        
+        # 听感优先配置
         time_tolerance = 5.0 if target_duration <= 30 else 3.0
         time_penalty_weight = 0.02 
         
@@ -256,8 +271,10 @@ class AudioRemixer:
             if ideal_time_b >= self.beat_times[max_idx]: break
             j_approx = np.searchsorted(self.beat_times, ideal_time_b)
             search_window_beats = int(time_tolerance * 2)
+            
             start_j = max(i + 8, j_approx - search_window_beats)
             end_j = min(n_beats - 4, j_approx + search_window_beats)
+            
             if start_j >= end_j: continue
             
             feat_a = self.beat_features[i].reshape(1, -1)
@@ -268,8 +285,10 @@ class AudioRemixer:
             est_durations = time_a + (self.duration - candidate_times)
             time_errors = np.abs(est_durations - target_duration)
             final_scores = sims - (time_errors * time_penalty_weight)
+            
             local_best_idx = np.argmax(final_scores)
             local_best_score = final_scores[local_best_idx]
+            
             if local_best_score > best_score:
                 best_score = local_best_score
                 real_j = start_j + local_best_idx
@@ -284,30 +303,64 @@ class AudioRemixer:
         ]
 
     def plan_multi_loop_remix(self, target_duration):
+        """高级路径规划：支持延长 (Loop Back) 和 缩短 (Skip Forward)"""
+        
+        # === A. 缩短模式 (Target < Original) ===
         if target_duration < self.duration:
             if target_duration < 5.0:
                 return self._plan_hard_cut(target_duration), target_duration
+
+            # 弹性搜索最佳切点
             cut_indices, score = self._find_best_cut_points(target_duration)
+            
             timeline = []
             if cut_indices:
                 idx_a, idx_b = cut_indices
                 time_a = self.beat_times[idx_a]
                 time_b = self.beat_times[idx_b]
-                timeline.append({"source_start": 0.0, "source_end": time_a, "duration": time_a, "type": "Head", "xfade": 0, "remix_start": 0.0, "refine_end": True})
+                
+                # Head: 0 -> A
+                timeline.append({
+                    "source_start": 0.0,
+                    "source_end": time_a,
+                    "duration": time_a,
+                    "type": "Head",
+                    "xfade": 0,
+                    "remix_start": 0.0,
+                    "refine_end": True
+                })
+                
+                # Tail: B -> End
                 tail_dur = self.duration - time_b
-                timeline.append({"source_start": time_b, "source_end": self.duration, "duration": tail_dur, "type": "Tail", "xfade": 30, "remix_start": time_a, "is_jump": True, "refine_start": True})
-                return timeline, time_a + tail_dur
+                timeline.append({
+                    "source_start": time_b,
+                    "source_end": self.duration,
+                    "duration": tail_dur,
+                    "type": "Tail",
+                    "xfade": 30, # 跳跃点 Crossfade
+                    "remix_start": time_a,
+                    "is_jump": True,
+                    "refine_start": True
+                })
+                
+                actual_dur = time_a + tail_dur
+                return timeline, actual_dur
             else:
                 return self._plan_hard_cut(target_duration), target_duration
+
+        # === B. 延长模式 (Target > Original) ===
         else:
             if not self.loops:
                 return [{"source_start":0, "source_end":self.duration, "duration":self.duration, "type":"Original", "remix_start":0}], self.duration
+            
             active_loops = self._filter_loops()
             if not active_loops:
                 active_loops = [self.loops[0]]
                 active_loops[0]['repeats'] = 0
+            
             current_total = self.duration
             time_diff = target_duration - current_total
+            
             if time_diff > 0:
                 while time_diff > 0:
                     best_idx = -1; best_score = -1
@@ -320,22 +373,58 @@ class AudioRemixer:
                         active_loops[best_idx]['repeats'] += 1
                         time_diff -= active_loops[best_idx]['duration']
                     else: break
+            
             timeline = []
             cursor = 0.0      
             source_cursor = 0.0
+            
             for loop in active_loops:
+                # 线性部分
                 if source_cursor < loop['end']:
                     seg_dur = loop['end'] - source_cursor
-                    timeline.append({"source_start": source_cursor, "source_end": loop['end'], "duration": seg_dur, "type": "Linear", "xfade": 0, "remix_start": cursor, "refine_start": True if len(timeline)>0 else False, "refine_end": True})
+                    timeline.append({
+                        "source_start": source_cursor, 
+                        "source_end": loop['end'], 
+                        "duration": seg_dur, 
+                        "type": "Linear", 
+                        "xfade": 0, 
+                        "remix_start": cursor, 
+                        "refine_start": True if len(timeline)>0 else False, 
+                        "refine_end": True
+                    })
                     cursor += seg_dur
                     source_cursor = loop['end']
+                
+                # 循环部分
                 if loop['repeats'] > 0:
                     for i in range(loop['repeats']):
-                        timeline.append({"source_start": loop['start'], "source_end": loop['end'], "duration": loop['duration'], "type": "Loop Extension", "xfade": 25, "remix_start": cursor, "loop_id": loop.get('start'), "refine_start": True, "refine_end": True})
+                        timeline.append({
+                            "source_start": loop['start'], 
+                            "source_end": loop['end'], 
+                            "duration": loop['duration'], 
+                            "type": "Loop Extension", 
+                            "xfade": 25, 
+                            "remix_start": cursor, 
+                            "loop_id": loop.get('start'), 
+                            "refine_start": True, 
+                            "refine_end": True
+                        })
                         cursor += loop['duration']
+            
+            # 尾部
             if source_cursor < self.duration:
-                timeline.append({"source_start": source_cursor, "source_end": self.duration, "duration": self.duration - source_cursor, "type": "Outro", "xfade": 0, "remix_start": cursor, "refine_start": True, "refine_end": False})
+                timeline.append({
+                    "source_start": source_cursor, 
+                    "source_end": self.duration, 
+                    "duration": self.duration - source_cursor, 
+                    "type": "Outro", 
+                    "xfade": 0, 
+                    "remix_start": cursor, 
+                    "refine_start": True, 
+                    "refine_end": False
+                })
                 cursor += (self.duration - source_cursor)
+                
             return timeline, cursor
 
     def render_remix(self, timeline):
@@ -346,15 +435,21 @@ class AudioRemixer:
         for i, seg in enumerate(timeline):
             s_time = seg['source_start']
             e_time = seg['source_end']
+            
             if seg.get('refine_start', False): s_idx = self._refine_cut_point(s_time)
             else: s_idx = int(s_time * self.sr)
+            
             if seg.get('refine_end', False): e_idx = self._refine_cut_point(e_time)
             else: e_idx = int(e_time * self.sr)
+            
             if s_idx >= e_idx: continue
             if e_idx > len(self.y): e_idx = len(self.y)
+            
             chunk = self.y[s_idx:e_idx]
+            
             fade_ms = seg.get('xfade', 0)
             fade_len = int((fade_ms / 1000) * self.sr)
+            
             if i == 0 or fade_len == 0:
                 output[cursor:cursor+len(chunk)] = chunk
                 cursor += len(chunk)
@@ -364,10 +459,14 @@ class AudioRemixer:
                 prev = output[overlap:cursor]
                 curr = chunk[:fade_len]
                 n = min(len(prev), len(curr))
+                
                 if n > 1:
                     lin = np.linspace(0, 1, n)
-                    mix = prev*(1-lin) + curr*lin
+                    w_in = np.sin(lin * np.pi / 2)
+                    w_out = np.cos(lin * np.pi / 2)
+                    mix = prev*w_out + curr*w_in
                     output[overlap:overlap+n] = mix
+                
                 output[cursor:cursor+len(chunk)-fade_len] = chunk[fade_len:]
                 cursor += len(chunk) - fade_len
         return output[:cursor]
