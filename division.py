@@ -20,14 +20,13 @@ class AudioRemixer:
         self.beat_features = None 
         self.loops = []
         
-        # 初始计算 (Analyze 中会更新)
+        # 计算全局特征用于相对比较 (初始计算)
         self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
         self.global_rms = np.sqrt(np.mean(self.y**2))
 
     def _trim_silence(self):
         """
-        [找回] 预处理：切除尾部静音
-        这对时长控制至关重要，否则 Outro 会包含大量无效时间。
+        [保留功能] 预处理：切除尾部静音
         """
         # 1. 计算短时能量
         mse = librosa.feature.rms(y=self.y, frame_length=2048, hop_length=512)[0]
@@ -54,12 +53,12 @@ class AudioRemixer:
             self.y = self.y[:trim_end]
             self.duration = trim_end / self.sr
             
-            # [重要] 更新全局特征，确保后续分析准确
+            # 更新全局特征以保持状态一致
             self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
             self.global_rms = np.sqrt(np.mean(self.y**2))
 
     def _refine_cut_point(self, time_sec, search_window_ms=50):
-        """[保留] 微调切点：瞬态回溯 + 过零点锁定"""
+        """[保留功能] 微调切点：瞬态回溯 + 过零点锁定"""
         center_sample = int(time_sec * self.sr)
         search_samples = int((search_window_ms / 1000) * self.sr)
         
@@ -68,6 +67,7 @@ class AudioRemixer:
         
         if start_search >= end_search: return center_sample
         
+        # 瞬态检测
         onset_frame_center = librosa.samples_to_frames(center_sample)
         search_frame_rad = librosa.samples_to_frames(search_samples)
         
@@ -82,6 +82,7 @@ class AudioRemixer:
         else:
             target_sample = center_sample
 
+        # 过零点锁定
         zc_window = 200
         z_start = max(0, target_sample - zc_window)
         z_end = min(len(self.y), target_sample + zc_window)
@@ -96,7 +97,7 @@ class AudioRemixer:
         return target_sample
 
     def _classify_segment(self, start_time, end_time):
-        """[找回] 基于音频特征动态分类 Loop 类型"""
+        """[保留功能] 基于音频特征动态分类 Loop 类型"""
         s_idx = int(start_time * self.sr)
         e_idx = int(end_time * self.sr)
         chunk = self.y[s_idx:e_idx]
@@ -115,9 +116,28 @@ class AudioRemixer:
     def analyze(self):
         """分析音频结构"""
         
-        # 1. [关键修复] 先执行静音切除
+        # 1. [保留] 先执行静音切除
         self._trim_silence()
         
+        # ========================================================
+        # 2. [新增完善] 信号预处理：去直流 + 归一化
+        # ========================================================
+        
+        # 消除直流偏移 (DC Offset Removal)
+        # 作用：让波形中心严格对准 0，确保 _refine_cut_point 的过零点检测极其精准，消除爆音。
+        self.y = self.y - np.mean(self.y)
+        
+        # 峰值归一化 (Peak Normalization)
+        # 作用：将最大音量拉到 1.0。确保 _classify_segment 中的能量阈值(1.1/0.6)对所有音量的歌曲都有效。
+        if np.max(np.abs(self.y)) > 0:
+            self.y = self.y / np.max(np.abs(self.y))
+            
+        # [同步更新] 因为波形数值变了，必须更新全局特征，否则分类器会失效
+        self.onset_env = librosa.onset.onset_strength(y=self.y, sr=self.sr)
+        self.global_rms = np.sqrt(np.mean(self.y**2))
+        # ========================================================
+        
+        # 3. 后续常规分析 (保持不变)
         y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         tempo, beat_frames = librosa.beat.beat_track(y=y_percussive, sr=self.sr)
         
@@ -134,7 +154,7 @@ class AudioRemixer:
         mfcc_sync = librosa.util.normalize(mfcc_sync, axis=1)
         features = np.vstack([chroma_sync, mfcc_sync])
         
-        # 保存特征用于缩短算法
+        # [重要] 保存特征用于缩短算法的全网格搜索
         self.beat_features = features.T
         
         stack_size = 4 
@@ -166,7 +186,7 @@ class AudioRemixer:
                             if abs(l['start'] - time_start) < 1.0 and abs(l['end'] - time_end) < 1.0:
                                 is_dup = True; break
                         if not is_dup:
-                            # [关键修复] 调用分类器
+                            # 调用分类器
                             loop_type = self._classify_segment(time_start, time_end)
                             self.loops.append({
                                 "start": time_start,
@@ -179,7 +199,7 @@ class AudioRemixer:
         self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
 
     def export_analysis_data(self, source_filename="audio.wav"):
-        """生成分析报告文档"""
+        """[保留功能] 生成分析报告文档"""
         looping_points = []
         for loop in self.loops:
             looping_points.append({
@@ -209,7 +229,7 @@ class AudioRemixer:
         return raw_data, "\n".join(lines)
 
     def generate_loop_preview(self, loop_data, repetitions=4):
-        """生成预览音频"""
+        """[保留功能] 生成预览音频"""
         s_idx = self._refine_cut_point(loop_data['start'])
         e_idx = self._refine_cut_point(loop_data['end'])
         
@@ -253,7 +273,7 @@ class AudioRemixer:
         return sorted(selected_loops, key=lambda x: x['start'])
 
     def _find_best_cut_points(self, target_duration):
-        """弹性搜索最佳缝合点"""
+        """[保留功能] 弹性搜索最佳缝合点"""
         n_beats = len(self.beat_times)
         remove_amount = self.duration - target_duration
         best_score = -999.0
@@ -274,7 +294,6 @@ class AudioRemixer:
             
             start_j = max(i + 8, j_approx - search_window_beats)
             end_j = min(n_beats - 4, j_approx + search_window_beats)
-            
             if start_j >= end_j: continue
             
             feat_a = self.beat_features[i].reshape(1, -1)
@@ -303,7 +322,9 @@ class AudioRemixer:
         ]
 
     def plan_multi_loop_remix(self, target_duration):
-        """高级路径规划：支持延长 (Loop Back) 和 缩短 (Skip Forward)"""
+        """
+        [保留功能] 高级路径规划：支持延长 (Loop Back) 和 缩短 (Skip Forward)
+        """
         
         # === A. 缩短模式 (Target < Original) ===
         if target_duration < self.duration:

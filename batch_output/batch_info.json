@@ -1,0 +1,2200 @@
+{
+    "summary": {
+        "total_process_time": 59.8974,
+        "item_count": 137
+    },
+    "data": {
+        "30": {
+            "target_duration": 30,
+            "actual_duration": 29.08,
+            "process_time": 1.743,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_30s.wav",
+                "image": "remix_30s.png"
+            }
+        },
+        "31": {
+            "target_duration": 31,
+            "actual_duration": 29.08,
+            "process_time": 0.2068,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_31s.wav",
+                "image": "remix_31s.png"
+            }
+        },
+        "32": {
+            "target_duration": 32,
+            "actual_duration": 31.36,
+            "process_time": 0.2156,
+            "jump_points": [
+                {
+                    "time": 22.36,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_32s.wav",
+                "image": "remix_32s.png"
+            }
+        },
+        "33": {
+            "target_duration": 33,
+            "actual_duration": 33.63,
+            "process_time": 0.2093,
+            "jump_points": [
+                {
+                    "time": 17.79,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_33s.wav",
+                "image": "remix_33s.png"
+            }
+        },
+        "34": {
+            "target_duration": 34,
+            "actual_duration": 33.63,
+            "process_time": 0.1998,
+            "jump_points": [
+                {
+                    "time": 17.79,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_34s.wav",
+                "image": "remix_34s.png"
+            }
+        },
+        "35": {
+            "target_duration": 35,
+            "actual_duration": 38.21,
+            "process_time": 0.2786,
+            "jump_points": [
+                {
+                    "time": 12.63,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_35s.wav",
+                "image": "remix_35s.png"
+            }
+        },
+        "36": {
+            "target_duration": 36,
+            "actual_duration": 38.21,
+            "process_time": 0.2284,
+            "jump_points": [
+                {
+                    "time": 12.63,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_36s.wav",
+                "image": "remix_36s.png"
+            }
+        },
+        "37": {
+            "target_duration": 37,
+            "actual_duration": 38.21,
+            "process_time": 0.2611,
+            "jump_points": [
+                {
+                    "time": 12.63,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_37s.wav",
+                "image": "remix_37s.png"
+            }
+        },
+        "38": {
+            "target_duration": 38,
+            "actual_duration": 38.21,
+            "process_time": 0.3176,
+            "jump_points": [
+                {
+                    "time": 12.63,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_38s.wav",
+                "image": "remix_38s.png"
+            }
+        },
+        "39": {
+            "target_duration": 39,
+            "actual_duration": 38.23,
+            "process_time": 0.2162,
+            "jump_points": [
+                {
+                    "time": 30.93,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_39s.wav",
+                "image": "remix_39s.png"
+            }
+        },
+        "40": {
+            "target_duration": 40,
+            "actual_duration": 40.51,
+            "process_time": 0.2174,
+            "jump_points": [
+                {
+                    "time": 31.51,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_40s.wav",
+                "image": "remix_40s.png"
+            }
+        },
+        "41": {
+            "target_duration": 41,
+            "actual_duration": 40.51,
+            "process_time": 0.2364,
+            "jump_points": [
+                {
+                    "time": 31.51,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_41s.wav",
+                "image": "remix_41s.png"
+            }
+        },
+        "42": {
+            "target_duration": 42,
+            "actual_duration": 42.78,
+            "process_time": 0.2309,
+            "jump_points": [
+                {
+                    "time": 31.51,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_42s.wav",
+                "image": "remix_42s.png"
+            }
+        },
+        "43": {
+            "target_duration": 43,
+            "actual_duration": 42.78,
+            "process_time": 0.2282,
+            "jump_points": [
+                {
+                    "time": 31.51,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_43s.wav",
+                "image": "remix_43s.png"
+            }
+        },
+        "44": {
+            "target_duration": 44,
+            "actual_duration": 42.78,
+            "process_time": 0.2177,
+            "jump_points": [
+                {
+                    "time": 31.51,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_44s.wav",
+                "image": "remix_44s.png"
+            }
+        },
+        "45": {
+            "target_duration": 45,
+            "actual_duration": 47.36,
+            "process_time": 0.2338,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_45s.wav",
+                "image": "remix_45s.png"
+            }
+        },
+        "46": {
+            "target_duration": 46,
+            "actual_duration": 47.36,
+            "process_time": 0.2518,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_46s.wav",
+                "image": "remix_46s.png"
+            }
+        },
+        "47": {
+            "target_duration": 47,
+            "actual_duration": 47.36,
+            "process_time": 0.2318,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_47s.wav",
+                "image": "remix_47s.png"
+            }
+        },
+        "48": {
+            "target_duration": 48,
+            "actual_duration": 47.36,
+            "process_time": 0.3041,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_48s.wav",
+                "image": "remix_48s.png"
+            }
+        },
+        "49": {
+            "target_duration": 49,
+            "actual_duration": 47.36,
+            "process_time": 0.3201,
+            "jump_points": [
+                {
+                    "time": 14.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_49s.wav",
+                "image": "remix_49s.png"
+            }
+        },
+        "50": {
+            "target_duration": 50,
+            "actual_duration": 49.66,
+            "process_time": 0.3771,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_50s.wav",
+                "image": "remix_50s.png"
+            }
+        },
+        "51": {
+            "target_duration": 51,
+            "actual_duration": 51.93,
+            "process_time": 0.3645,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_51s.wav",
+                "image": "remix_51s.png"
+            }
+        },
+        "52": {
+            "target_duration": 52,
+            "actual_duration": 51.93,
+            "process_time": 0.2705,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_52s.wav",
+                "image": "remix_52s.png"
+            }
+        },
+        "53": {
+            "target_duration": 53,
+            "actual_duration": 51.93,
+            "process_time": 0.379,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_53s.wav",
+                "image": "remix_53s.png"
+            }
+        },
+        "54": {
+            "target_duration": 54,
+            "actual_duration": 54.21,
+            "process_time": 0.3062,
+            "jump_points": [
+                {
+                    "time": 38.36,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_54s.wav",
+                "image": "remix_54s.png"
+            }
+        },
+        "55": {
+            "target_duration": 55,
+            "actual_duration": 56.51,
+            "process_time": 0.2839,
+            "jump_points": [
+                {
+                    "time": 21.78,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_55s.wav",
+                "image": "remix_55s.png"
+            }
+        },
+        "56": {
+            "target_duration": 56,
+            "actual_duration": 56.51,
+            "process_time": 0.3025,
+            "jump_points": [
+                {
+                    "time": 21.78,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_56s.wav",
+                "image": "remix_56s.png"
+            }
+        },
+        "57": {
+            "target_duration": 57,
+            "actual_duration": 56.51,
+            "process_time": 0.262,
+            "jump_points": [
+                {
+                    "time": 21.78,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_57s.wav",
+                "image": "remix_57s.png"
+            }
+        },
+        "58": {
+            "target_duration": 58,
+            "actual_duration": 56.51,
+            "process_time": 0.3665,
+            "jump_points": [
+                {
+                    "time": 21.78,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_58s.wav",
+                "image": "remix_58s.png"
+            }
+        },
+        "59": {
+            "target_duration": 59,
+            "actual_duration": 56.51,
+            "process_time": 0.3475,
+            "jump_points": [
+                {
+                    "time": 21.78,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_59s.wav",
+                "image": "remix_59s.png"
+            }
+        },
+        "60": {
+            "target_duration": 60,
+            "actual_duration": 61.08,
+            "process_time": 0.398,
+            "jump_points": [
+                {
+                    "time": 49.81,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_60s.wav",
+                "image": "remix_60s.png"
+            }
+        },
+        "61": {
+            "target_duration": 61,
+            "actual_duration": 61.08,
+            "process_time": 0.3401,
+            "jump_points": [
+                {
+                    "time": 49.81,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_61s.wav",
+                "image": "remix_61s.png"
+            }
+        },
+        "62": {
+            "target_duration": 62,
+            "actual_duration": 61.08,
+            "process_time": 0.3157,
+            "jump_points": [
+                {
+                    "time": 49.81,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_62s.wav",
+                "image": "remix_62s.png"
+            }
+        },
+        "63": {
+            "target_duration": 63,
+            "actual_duration": 65.63,
+            "process_time": 0.2924,
+            "jump_points": [
+                {
+                    "time": 45.79,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_63s.wav",
+                "image": "remix_63s.png"
+            }
+        },
+        "64": {
+            "target_duration": 64,
+            "actual_duration": 65.63,
+            "process_time": 0.7542,
+            "jump_points": [
+                {
+                    "time": 45.79,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_64s.wav",
+                "image": "remix_64s.png"
+            }
+        },
+        "65": {
+            "target_duration": 65,
+            "actual_duration": 65.63,
+            "process_time": 0.36,
+            "jump_points": [
+                {
+                    "time": 45.79,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_65s.wav",
+                "image": "remix_65s.png"
+            }
+        },
+        "66": {
+            "target_duration": 66,
+            "actual_duration": 65.66,
+            "process_time": 0.61,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_66s.wav",
+                "image": "remix_66s.png"
+            }
+        },
+        "67": {
+            "target_duration": 67,
+            "actual_duration": 65.66,
+            "process_time": 0.573,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_67s.wav",
+                "image": "remix_67s.png"
+            }
+        },
+        "68": {
+            "target_duration": 68,
+            "actual_duration": 67.93,
+            "process_time": 0.4308,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_68s.wav",
+                "image": "remix_68s.png"
+            }
+        },
+        "69": {
+            "target_duration": 69,
+            "actual_duration": 67.93,
+            "process_time": 0.5079,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_69s.wav",
+                "image": "remix_69s.png"
+            }
+        },
+        "70": {
+            "target_duration": 70,
+            "actual_duration": 70.23,
+            "process_time": 0.3691,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_70s.wav",
+                "image": "remix_70s.png"
+            }
+        },
+        "71": {
+            "target_duration": 71,
+            "actual_duration": 70.23,
+            "process_time": 0.2784,
+            "jump_points": [
+                {
+                    "time": 40.66,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_71s.wav",
+                "image": "remix_71s.png"
+            }
+        },
+        "72": {
+            "target_duration": 72,
+            "actual_duration": 74.78,
+            "process_time": 0.3436,
+            "jump_points": [
+                {
+                    "time": 49.2,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_72s.wav",
+                "image": "remix_72s.png"
+            }
+        },
+        "73": {
+            "target_duration": 73,
+            "actual_duration": 74.78,
+            "process_time": 0.3097,
+            "jump_points": [
+                {
+                    "time": 49.2,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_73s.wav",
+                "image": "remix_73s.png"
+            }
+        },
+        "74": {
+            "target_duration": 74,
+            "actual_duration": 74.78,
+            "process_time": 0.3388,
+            "jump_points": [
+                {
+                    "time": 49.2,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_74s.wav",
+                "image": "remix_74s.png"
+            }
+        },
+        "75": {
+            "target_duration": 75,
+            "actual_duration": 74.78,
+            "process_time": 0.3106,
+            "jump_points": [
+                {
+                    "time": 49.2,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_75s.wav",
+                "image": "remix_75s.png"
+            }
+        },
+        "76": {
+            "target_duration": 76,
+            "actual_duration": 74.78,
+            "process_time": 0.2791,
+            "jump_points": [
+                {
+                    "time": 49.2,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_76s.wav",
+                "image": "remix_76s.png"
+            }
+        },
+        "77": {
+            "target_duration": 77,
+            "actual_duration": 77.08,
+            "process_time": 0.4028,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_77s.wav",
+                "image": "remix_77s.png"
+            }
+        },
+        "78": {
+            "target_duration": 78,
+            "actual_duration": 79.35,
+            "process_time": 0.3088,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_78s.wav",
+                "image": "remix_78s.png"
+            }
+        },
+        "79": {
+            "target_duration": 79,
+            "actual_duration": 79.35,
+            "process_time": 0.4812,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_79s.wav",
+                "image": "remix_79s.png"
+            }
+        },
+        "80": {
+            "target_duration": 80,
+            "actual_duration": 79.35,
+            "process_time": 0.3198,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_80s.wav",
+                "image": "remix_80s.png"
+            }
+        },
+        "81": {
+            "target_duration": 81,
+            "actual_duration": 81.68,
+            "process_time": 0.3674,
+            "jump_points": [
+                {
+                    "time": 6.97,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_81s.wav",
+                "image": "remix_81s.png"
+            }
+        },
+        "82": {
+            "target_duration": 82,
+            "actual_duration": 82.23,
+            "process_time": 0.4079,
+            "jump_points": [
+                {
+                    "time": 6.97,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_82s.wav",
+                "image": "remix_82s.png"
+            }
+        },
+        "83": {
+            "target_duration": 83,
+            "actual_duration": 82.79,
+            "process_time": 0.4199,
+            "jump_points": [
+                {
+                    "time": 2.39,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_83s.wav",
+                "image": "remix_83s.png"
+            }
+        },
+        "84": {
+            "target_duration": 84,
+            "actual_duration": 83.93,
+            "process_time": 0.4216,
+            "jump_points": [
+                {
+                    "time": 9.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_84s.wav",
+                "image": "remix_84s.png"
+            }
+        },
+        "85": {
+            "target_duration": 85,
+            "actual_duration": 85.04,
+            "process_time": 0.3597,
+            "jump_points": [
+                {
+                    "time": 4.64,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_85s.wav",
+                "image": "remix_85s.png"
+            }
+        },
+        "86": {
+            "target_duration": 86,
+            "actual_duration": 86.18,
+            "process_time": 0.3613,
+            "jump_points": [
+                {
+                    "time": 9.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_86s.wav",
+                "image": "remix_86s.png"
+            }
+        },
+        "87": {
+            "target_duration": 87,
+            "actual_duration": 86.18,
+            "process_time": 0.4126,
+            "jump_points": [
+                {
+                    "time": 9.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_87s.wav",
+                "image": "remix_87s.png"
+            }
+        },
+        "88": {
+            "target_duration": 88,
+            "actual_duration": 88.5,
+            "process_time": 0.824,
+            "jump_points": [
+                {
+                    "time": 77.23,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_88s.wav",
+                "image": "remix_88s.png"
+            }
+        },
+        "89": {
+            "target_duration": 89,
+            "actual_duration": 88.5,
+            "process_time": 0.7018,
+            "jump_points": [
+                {
+                    "time": 77.23,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_89s.wav",
+                "image": "remix_89s.png"
+            }
+        },
+        "90": {
+            "target_duration": 90,
+            "actual_duration": 88.5,
+            "process_time": 0.3911,
+            "jump_points": [
+                {
+                    "time": 77.23,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_90s.wav",
+                "image": "remix_90s.png"
+            }
+        },
+        "91": {
+            "target_duration": 91,
+            "actual_duration": 90.78,
+            "process_time": 0.5414,
+            "jump_points": [
+                {
+                    "time": 38.36,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_91s.wav",
+                "image": "remix_91s.png"
+            }
+        },
+        "92": {
+            "target_duration": 92,
+            "actual_duration": 93.08,
+            "process_time": 0.3734,
+            "jump_points": [
+                {
+                    "time": 76.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_92s.wav",
+                "image": "remix_92s.png"
+            }
+        },
+        "93": {
+            "target_duration": 93,
+            "actual_duration": 93.08,
+            "process_time": 0.5532,
+            "jump_points": [
+                {
+                    "time": 76.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_93s.wav",
+                "image": "remix_93s.png"
+            }
+        },
+        "94": {
+            "target_duration": 94,
+            "actual_duration": 93.08,
+            "process_time": 0.4002,
+            "jump_points": [
+                {
+                    "time": 76.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_94s.wav",
+                "image": "remix_94s.png"
+            }
+        },
+        "95": {
+            "target_duration": 95,
+            "actual_duration": 93.08,
+            "process_time": 0.5147,
+            "jump_points": [
+                {
+                    "time": 76.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_95s.wav",
+                "image": "remix_95s.png"
+            }
+        },
+        "96": {
+            "target_duration": 96,
+            "actual_duration": 93.08,
+            "process_time": 0.4253,
+            "jump_points": [
+                {
+                    "time": 76.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_96s.wav",
+                "image": "remix_96s.png"
+            }
+        },
+        "97": {
+            "target_duration": 97,
+            "actual_duration": 97.65,
+            "process_time": 0.4471,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_97s.wav",
+                "image": "remix_97s.png"
+            }
+        },
+        "98": {
+            "target_duration": 98,
+            "actual_duration": 97.65,
+            "process_time": 0.5134,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_98s.wav",
+                "image": "remix_98s.png"
+            }
+        },
+        "99": {
+            "target_duration": 99,
+            "actual_duration": 102.2,
+            "process_time": 0.4897,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_99s.wav",
+                "image": "remix_99s.png"
+            }
+        },
+        "100": {
+            "target_duration": 100,
+            "actual_duration": 102.2,
+            "process_time": 0.5224,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_100s.wav",
+                "image": "remix_100s.png"
+            }
+        },
+        "101": {
+            "target_duration": 101,
+            "actual_duration": 102.2,
+            "process_time": 0.3608,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_101s.wav",
+                "image": "remix_101s.png"
+            }
+        },
+        "102": {
+            "target_duration": 102,
+            "actual_duration": 102.2,
+            "process_time": 0.5957,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_102s.wav",
+                "image": "remix_102s.png"
+            }
+        },
+        "103": {
+            "target_duration": 103,
+            "actual_duration": 102.2,
+            "process_time": 0.4714,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_103s.wav",
+                "image": "remix_103s.png"
+            }
+        },
+        "104": {
+            "target_duration": 104,
+            "actual_duration": 102.2,
+            "process_time": 0.5676,
+            "jump_points": [
+                {
+                    "time": 78.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_104s.wav",
+                "image": "remix_104s.png"
+            }
+        },
+        "105": {
+            "target_duration": 105,
+            "actual_duration": 104.5,
+            "process_time": 0.3956,
+            "jump_points": [
+                {
+                    "time": 95.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_105s.wav",
+                "image": "remix_105s.png"
+            }
+        },
+        "106": {
+            "target_duration": 106,
+            "actual_duration": 106.78,
+            "process_time": 0.509,
+            "jump_points": [
+                {
+                    "time": 95.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_106s.wav",
+                "image": "remix_106s.png"
+            }
+        },
+        "107": {
+            "target_duration": 107,
+            "actual_duration": 106.78,
+            "process_time": 0.4151,
+            "jump_points": [
+                {
+                    "time": 95.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_107s.wav",
+                "image": "remix_107s.png"
+            }
+        },
+        "108": {
+            "target_duration": 108,
+            "actual_duration": 111.38,
+            "process_time": 0.5344,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_108s.wav",
+                "image": "remix_108s.png"
+            }
+        },
+        "109": {
+            "target_duration": 109,
+            "actual_duration": 111.38,
+            "process_time": 0.5666,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_109s.wav",
+                "image": "remix_109s.png"
+            }
+        },
+        "110": {
+            "target_duration": 110,
+            "actual_duration": 111.38,
+            "process_time": 0.3516,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_110s.wav",
+                "image": "remix_110s.png"
+            }
+        },
+        "111": {
+            "target_duration": 111,
+            "actual_duration": 111.38,
+            "process_time": 0.3811,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_111s.wav",
+                "image": "remix_111s.png"
+            }
+        },
+        "112": {
+            "target_duration": 112,
+            "actual_duration": 111.38,
+            "process_time": 0.366,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_112s.wav",
+                "image": "remix_112s.png"
+            }
+        },
+        "113": {
+            "target_duration": 113,
+            "actual_duration": 111.38,
+            "process_time": 0.3684,
+            "jump_points": [
+                {
+                    "time": 67.5,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_113s.wav",
+                "image": "remix_113s.png"
+            }
+        },
+        "114": {
+            "target_duration": 114,
+            "actual_duration": 113.65,
+            "process_time": 0.3585,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_114s.wav",
+                "image": "remix_114s.png"
+            }
+        },
+        "115": {
+            "target_duration": 115,
+            "actual_duration": 115.93,
+            "process_time": 0.4038,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_115s.wav",
+                "image": "remix_115s.png"
+            }
+        },
+        "116": {
+            "target_duration": 116,
+            "actual_duration": 115.93,
+            "process_time": 0.403,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_116s.wav",
+                "image": "remix_116s.png"
+            }
+        },
+        "117": {
+            "target_duration": 117,
+            "actual_duration": 115.93,
+            "process_time": 0.4352,
+            "jump_points": [
+                {
+                    "time": 68.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_117s.wav",
+                "image": "remix_117s.png"
+            }
+        },
+        "118": {
+            "target_duration": 118,
+            "actual_duration": 120.5,
+            "process_time": 0.3571,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_118s.wav",
+                "image": "remix_118s.png"
+            }
+        },
+        "119": {
+            "target_duration": 119,
+            "actual_duration": 120.5,
+            "process_time": 0.37,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_119s.wav",
+                "image": "remix_119s.png"
+            }
+        },
+        "120": {
+            "target_duration": 120,
+            "actual_duration": 120.5,
+            "process_time": 0.3809,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_120s.wav",
+                "image": "remix_120s.png"
+            }
+        },
+        "121": {
+            "target_duration": 121,
+            "actual_duration": 120.52,
+            "process_time": 0.4028,
+            "jump_points": [
+                {
+                    "time": 81.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_121s.wav",
+                "image": "remix_121s.png"
+            }
+        },
+        "122": {
+            "target_duration": 122,
+            "actual_duration": 120.52,
+            "process_time": 0.5481,
+            "jump_points": [
+                {
+                    "time": 81.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_122s.wav",
+                "image": "remix_122s.png"
+            }
+        },
+        "123": {
+            "target_duration": 123,
+            "actual_duration": 122.8,
+            "process_time": 0.4614,
+            "jump_points": [
+                {
+                    "time": 113.8,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_123s.wav",
+                "image": "remix_123s.png"
+            }
+        },
+        "124": {
+            "target_duration": 124,
+            "actual_duration": 125.08,
+            "process_time": 0.424,
+            "jump_points": [
+                {
+                    "time": 118.38,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_124s.wav",
+                "image": "remix_124s.png"
+            }
+        },
+        "125": {
+            "target_duration": 125,
+            "actual_duration": 125.08,
+            "process_time": 0.3872,
+            "jump_points": [
+                {
+                    "time": 118.38,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_125s.wav",
+                "image": "remix_125s.png"
+            }
+        },
+        "126": {
+            "target_duration": 126,
+            "actual_duration": 125.08,
+            "process_time": 0.4184,
+            "jump_points": [
+                {
+                    "time": 118.38,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_126s.wav",
+                "image": "remix_126s.png"
+            }
+        },
+        "127": {
+            "target_duration": 127,
+            "actual_duration": 127.35,
+            "process_time": 0.3832,
+            "jump_points": [
+                {
+                    "time": 74.93,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_127s.wav",
+                "image": "remix_127s.png"
+            }
+        },
+        "128": {
+            "target_duration": 128,
+            "actual_duration": 129.65,
+            "process_time": 0.3919,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_128s.wav",
+                "image": "remix_128s.png"
+            }
+        },
+        "129": {
+            "target_duration": 129,
+            "actual_duration": 129.65,
+            "process_time": 0.3982,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_129s.wav",
+                "image": "remix_129s.png"
+            }
+        },
+        "130": {
+            "target_duration": 130,
+            "actual_duration": 129.65,
+            "process_time": 0.5331,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_130s.wav",
+                "image": "remix_130s.png"
+            }
+        },
+        "131": {
+            "target_duration": 131,
+            "actual_duration": 129.65,
+            "process_time": 0.6069,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_131s.wav",
+                "image": "remix_131s.png"
+            }
+        },
+        "132": {
+            "target_duration": 132,
+            "actual_duration": 131.95,
+            "process_time": 0.413,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_132s.wav",
+                "image": "remix_132s.png"
+            }
+        },
+        "133": {
+            "target_duration": 133,
+            "actual_duration": 134.22,
+            "process_time": 0.5347,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_133s.wav",
+                "image": "remix_133s.png"
+            }
+        },
+        "134": {
+            "target_duration": 134,
+            "actual_duration": 134.22,
+            "process_time": 0.4212,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_134s.wav",
+                "image": "remix_134s.png"
+            }
+        },
+        "135": {
+            "target_duration": 135,
+            "actual_duration": 134.22,
+            "process_time": 0.3949,
+            "jump_points": [
+                {
+                    "time": 122.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_135s.wav",
+                "image": "remix_135s.png"
+            }
+        },
+        "136": {
+            "target_duration": 136,
+            "actual_duration": 136.5,
+            "process_time": 0.3959,
+            "jump_points": [
+                {
+                    "time": 120.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_136s.wav",
+                "image": "remix_136s.png"
+            }
+        },
+        "137": {
+            "target_duration": 137,
+            "actual_duration": 138.8,
+            "process_time": 0.7154,
+            "jump_points": [
+                {
+                    "time": 104.07,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_137s.wav",
+                "image": "remix_137s.png"
+            }
+        },
+        "138": {
+            "target_duration": 138,
+            "actual_duration": 138.8,
+            "process_time": 0.5079,
+            "jump_points": [
+                {
+                    "time": 104.07,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_138s.wav",
+                "image": "remix_138s.png"
+            }
+        },
+        "139": {
+            "target_duration": 139,
+            "actual_duration": 138.8,
+            "process_time": 0.3772,
+            "jump_points": [
+                {
+                    "time": 104.07,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_139s.wav",
+                "image": "remix_139s.png"
+            }
+        },
+        "140": {
+            "target_duration": 140,
+            "actual_duration": 138.8,
+            "process_time": 0.4284,
+            "jump_points": [
+                {
+                    "time": 104.07,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_140s.wav",
+                "image": "remix_140s.png"
+            }
+        },
+        "141": {
+            "target_duration": 141,
+            "actual_duration": 141.07,
+            "process_time": 0.4109,
+            "jump_points": [
+                {
+                    "time": 113.8,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_141s.wav",
+                "image": "remix_141s.png"
+            }
+        },
+        "142": {
+            "target_duration": 142,
+            "actual_duration": 141.07,
+            "process_time": 0.5269,
+            "jump_points": [
+                {
+                    "time": 113.8,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_142s.wav",
+                "image": "remix_142s.png"
+            }
+        },
+        "143": {
+            "target_duration": 143,
+            "actual_duration": 143.35,
+            "process_time": 0.4707,
+            "jump_points": [
+                {
+                    "time": 132.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_143s.wav",
+                "image": "remix_143s.png"
+            }
+        },
+        "144": {
+            "target_duration": 144,
+            "actual_duration": 143.35,
+            "process_time": 0.5546,
+            "jump_points": [
+                {
+                    "time": 132.08,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_144s.wav",
+                "image": "remix_144s.png"
+            }
+        },
+        "145": {
+            "target_duration": 145,
+            "actual_duration": 145.65,
+            "process_time": 0.5446,
+            "jump_points": [
+                {
+                    "time": 138.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_145s.wav",
+                "image": "remix_145s.png"
+            }
+        },
+        "146": {
+            "target_duration": 146,
+            "actual_duration": 147.95,
+            "process_time": 0.5476,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_146s.wav",
+                "image": "remix_146s.png"
+            }
+        },
+        "147": {
+            "target_duration": 147,
+            "actual_duration": 147.95,
+            "process_time": 0.6087,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_147s.wav",
+                "image": "remix_147s.png"
+            }
+        },
+        "148": {
+            "target_duration": 148,
+            "actual_duration": 147.95,
+            "process_time": 0.6712,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_148s.wav",
+                "image": "remix_148s.png"
+            }
+        },
+        "149": {
+            "target_duration": 149,
+            "actual_duration": 147.95,
+            "process_time": 0.5069,
+            "jump_points": [
+                {
+                    "time": 60.09,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_149s.wav",
+                "image": "remix_149s.png"
+            }
+        },
+        "150": {
+            "target_duration": 150,
+            "actual_duration": 150.22,
+            "process_time": 0.5297,
+            "jump_points": [
+                {
+                    "time": 141.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_150s.wav",
+                "image": "remix_150s.png"
+            }
+        },
+        "151": {
+            "target_duration": 151,
+            "actual_duration": 150.22,
+            "process_time": 0.6065,
+            "jump_points": [
+                {
+                    "time": 141.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_151s.wav",
+                "image": "remix_151s.png"
+            }
+        },
+        "152": {
+            "target_duration": 152,
+            "actual_duration": 152.5,
+            "process_time": 0.6093,
+            "jump_points": [
+                {
+                    "time": 136.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_152s.wav",
+                "image": "remix_152s.png"
+            }
+        },
+        "153": {
+            "target_duration": 153,
+            "actual_duration": 152.5,
+            "process_time": 0.6409,
+            "jump_points": [
+                {
+                    "time": 136.65,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_153s.wav",
+                "image": "remix_153s.png"
+            }
+        },
+        "154": {
+            "target_duration": 154,
+            "actual_duration": 154.8,
+            "process_time": 0.6635,
+            "jump_points": [
+                {
+                    "time": 138.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_154s.wav",
+                "image": "remix_154s.png"
+            }
+        },
+        "155": {
+            "target_duration": 155,
+            "actual_duration": 157.1,
+            "process_time": 0.5646,
+            "jump_points": [
+                {
+                    "time": 113.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_155s.wav",
+                "image": "remix_155s.png"
+            }
+        },
+        "156": {
+            "target_duration": 156,
+            "actual_duration": 157.1,
+            "process_time": 0.5806,
+            "jump_points": [
+                {
+                    "time": 113.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_156s.wav",
+                "image": "remix_156s.png"
+            }
+        },
+        "157": {
+            "target_duration": 157,
+            "actual_duration": 157.1,
+            "process_time": 0.5357,
+            "jump_points": [
+                {
+                    "time": 113.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_157s.wav",
+                "image": "remix_157s.png"
+            }
+        },
+        "158": {
+            "target_duration": 158,
+            "actual_duration": 157.1,
+            "process_time": 0.4892,
+            "jump_points": [
+                {
+                    "time": 113.22,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_158s.wav",
+                "image": "remix_158s.png"
+            }
+        },
+        "159": {
+            "target_duration": 159,
+            "actual_duration": 159.37,
+            "process_time": 0.5738,
+            "jump_points": [
+                {
+                    "time": 150.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_159s.wav",
+                "image": "remix_159s.png"
+            }
+        },
+        "160": {
+            "target_duration": 160,
+            "actual_duration": 159.37,
+            "process_time": 0.6257,
+            "jump_points": [
+                {
+                    "time": 150.37,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_160s.wav",
+                "image": "remix_160s.png"
+            }
+        },
+        "161": {
+            "target_duration": 161,
+            "actual_duration": 161.65,
+            "process_time": 0.5771,
+            "jump_points": [
+                {
+                    "time": 154.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_161s.wav",
+                "image": "remix_161s.png"
+            }
+        },
+        "162": {
+            "target_duration": 162,
+            "actual_duration": 161.65,
+            "process_time": 0.64,
+            "jump_points": [
+                {
+                    "time": 154.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_162s.wav",
+                "image": "remix_162s.png"
+            }
+        },
+        "163": {
+            "target_duration": 163,
+            "actual_duration": 161.65,
+            "process_time": 0.6024,
+            "jump_points": [
+                {
+                    "time": 154.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_163s.wav",
+                "image": "remix_163s.png"
+            }
+        },
+        "164": {
+            "target_duration": 164,
+            "actual_duration": 161.65,
+            "process_time": 0.5589,
+            "jump_points": [
+                {
+                    "time": 154.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_164s.wav",
+                "image": "remix_164s.png"
+            }
+        },
+        "165": {
+            "target_duration": 165,
+            "actual_duration": 161.65,
+            "process_time": 0.6254,
+            "jump_points": [
+                {
+                    "time": 154.95,
+                    "type": "Tail",
+                    "xfade": 30
+                }
+            ],
+            "files": {
+                "audio": "remix_165s.wav",
+                "image": "remix_165s.png"
+            }
+        },
+        "166": {
+            "target_duration": 166,
+            "actual_duration": 166,
+            "process_time": 0.514,
+            "jump_points": [
+                {
+                    "time": 83.0,
+                    "type": "Tail",
+                    "xfade": 50
+                }
+            ],
+            "files": {
+                "audio": "remix_166s.wav",
+                "image": "remix_166s.png"
+            }
+        }
+    }
+}
