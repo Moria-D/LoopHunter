@@ -6,6 +6,15 @@ import json
 from scipy.ndimage import median_filter
 from scipy.spatial.distance import cdist
 
+try:
+    import torch
+    from demucs import pretrained
+    from demucs.apply import apply_model
+    DEMUCS_AVAILABLE = True
+except (ImportError, OSError) as e:
+    print(f"Warning: PyTorch/Demucs could not be loaded. Falling back to DSP processing. Error: {e}")
+    DEMUCS_AVAILABLE = False
+
 warnings.filterwarnings('ignore')
 
 class AudioRemixer:
@@ -96,9 +105,10 @@ class AudioRemixer:
         
         return target_sample
 
-    def _get_event_durations(self, onsets, envelope, sr, max_dur=2.0, min_dur=0.1):
+    def _get_event_durations(self, onsets, envelope, sr, max_dur=2.0, min_dur=0.1, silence_thresh=0.01):
         """
         [新增] 根据能量包络计算每个事件的持续时间
+        silence_thresh: 包络能量的最低阈值，防止追踪到底噪
         """
         durations = []
         n_frames = len(envelope)
@@ -131,7 +141,8 @@ class AudioRemixer:
                 peak_val = envelope[start_frame]
             
             # 寻找能量衰减点 (阈值法)
-            threshold = peak_val * 0.25 # 能量降至 25% 视为结束
+            # 动态阈值: 峰值的25% 或 底噪水平，取较大值
+            threshold = max(peak_val * 0.25, silence_thresh)
             end_frame = actual_limit
             
             # 从峰值开始向后搜索
@@ -252,72 +263,347 @@ class AudioRemixer:
                             })
         self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
 
-    def analyze_stems(self):
+    def _analyze_event_timbre(self, y_segment, sr):
         """
-        Analyze independent stems (Percussive/Harmonic) to find instrument events.
-        Simplified approach without deep learning models (Demucs/Spleeter).
+        [新增] 分析音频片段的音色特征，用于细分乐器类型
+        返回特征字典：centroid, flatness, rolloff
+        """
+        if len(y_segment) < 512:
+            return {"centroid": 0, "flatness": 0, "rolloff": 0}
+            
+        spec = np.abs(librosa.stft(y_segment))
+        centroid = np.mean(librosa.feature.spectral_centroid(S=spec, sr=sr))
+        flatness = np.mean(librosa.feature.spectral_flatness(S=spec))
+        rolloff = np.mean(librosa.feature.spectral_rolloff(S=spec, sr=sr))
+        
+        return {
+            "centroid": centroid,
+            "flatness": flatness,
+            "rolloff": rolloff
+        }
+
+    def _analyze_stems_demucs(self):
+        """
+        [NEW] Advanced Stem Separation using Demucs (Deep Learning)
+        Separates into: Drums, Bass, Other, Vocals
+        """
+        print("Loading Demucs model (htdemucs)...")
+        # Load model (htdemucs is fast and high quality)
+        model = pretrained.get_model('htdemucs')
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
+        
+        print("Preparing audio for Demucs...")
+        # Demucs expects 44.1kHz Stereo
+        # 1. Resample if needed
+        if self.sr != 44100:
+            y_44k = librosa.resample(self.y, orig_sr=self.sr, target_sr=44100)
+        else:
+            y_44k = self.y
+            
+        # 2. Make Stereo (1, 2, T)
+        # Assuming input is mono or stereo mixed to mono. 
+        # Create stereo tensor by duplicating channel
+        wav_tensor = torch.tensor(y_44k).float().to(device)
+        if wav_tensor.ndim == 1:
+            wav_tensor = wav_tensor.unsqueeze(0).repeat(2, 1).unsqueeze(0) # (1, 2, T)
+        elif wav_tensor.ndim == 2:
+            wav_tensor = wav_tensor.unsqueeze(0) # (1, C, T) - Assume already stereo if 2D, but librosa.load flattened it unless mono=False
+            
+        print("Running Demucs separation (this may take a while)...")
+        # Apply model
+        # shifts=1 for speed, split=True for memory efficiency on long files
+        ref = wav_tensor.mean(0)
+        wav_tensor = (wav_tensor - ref.mean()) / ref.std()
+        
+        sources = apply_model(model, wav_tensor, shifts=1, split=True, overlap=0.25, progress=False)[0]
+        # sources shape: (Sources, Channels, Time) -> (4, 2, T)
+        # Order: Drums, Bass, Other, Vocals
+        
+        source_names = ["drums", "bass", "other", "vocals"]
+        stems_raw = {}
+        for name, source in zip(source_names, sources):
+            # Mix down to mono
+            stem_mono = source.mean(0).cpu().numpy()
+            # Resample back to self.sr
+            if self.sr != 44100:
+                stem_resampled = librosa.resample(stem_mono, orig_sr=44100, target_sr=self.sr)
+            else:
+                stem_resampled = stem_mono
+            
+            # Ensure length matches self.y
+            if len(stem_resampled) != len(self.y):
+                target_len = len(self.y)
+                if len(stem_resampled) > target_len:
+                    stem_resampled = stem_resampled[:target_len]
+                else:
+                    stem_resampled = np.pad(stem_resampled, (0, target_len - len(stem_resampled)))
+                    
+            stems_raw[name] = stem_resampled
+            
+        print("Demucs separation complete.")
+        
+        # --- Post-Processing & Event Detection ---
+        
+        events = {
+            "kick": [],
+            "snare_perc": [],
+            "cymbals": [],
+            "bass": [],
+            "vocals_mid": [],
+            "instruments": []
+        }
+        
+        # Output Audio Buffers
+        stems_audio = {
+            "kick": np.zeros_like(self.y),
+            "snare_perc": np.zeros_like(self.y),
+            "cymbals": np.zeros_like(self.y),
+            "bass": stems_raw["bass"],
+            "vocals_mid": stems_raw["vocals"],
+            "instruments": stems_raw["other"]
+        }
+        
+        NOISE_THRESH_RMS = 0.02
+        
+        # 1. Analyze Drums Stem (Split into Kick/Snare/Cymbals)
+        y_drums = stems_raw["drums"]
+        onset_env_drums = librosa.onset.onset_strength(y=y_drums, sr=self.sr)
+        onsets_drums = librosa.onset.onset_detect(
+            onset_envelope=onset_env_drums, sr=self.sr, units='time', backtrack=True, delta=0.1, wait=5
+        )
+        
+        if len(onsets_drums) > 0:
+            durs_drums = self._get_event_durations(onsets_drums, onset_env_drums, self.sr, max_dur=0.4, min_dur=0.05)
+            onset_samples = librosa.time_to_samples(onsets_drums, sr=self.sr)
+            
+            # Prepare spectral separation for drums audio only
+            S_drums = librosa.stft(y_drums)
+            freqs = librosa.fft_frequencies(sr=self.sr)
+            mask_low = freqs < 250
+            mask_mid = (freqs >= 250) & (freqs < 3500)
+            mask_high = freqs >= 3500
+            
+            kick_audio = librosa.istft(S_drums * mask_low[:, np.newaxis], length=len(self.y))
+            snare_audio = librosa.istft(S_drums * mask_mid[:, np.newaxis], length=len(self.y))
+            cymbals_audio = librosa.istft(S_drums * mask_high[:, np.newaxis], length=len(self.y))
+            
+            stems_audio["kick"] = kick_audio
+            stems_audio["snare_perc"] = snare_audio
+            stems_audio["cymbals"] = cymbals_audio
+            
+            for t, d, s_idx in zip(onsets_drums, durs_drums, onset_samples):
+                e_idx = min(len(self.y), s_idx + int(0.1 * self.sr))
+                segment = y_drums[s_idx:e_idx]
+                
+                if np.sqrt(np.mean(segment**2)) < NOISE_THRESH_RMS: continue
+                
+                timbre = self._analyze_event_timbre(segment, self.sr)
+                event_data = {"start": float(t), "duration": float(d)}
+                
+                if timbre['centroid'] < 1500:
+                    events["kick"].append(event_data)
+                elif timbre['centroid'] > 3500 and timbre['flatness'] > 0.05:
+                    events["cymbals"].append(event_data)
+                else:
+                    events["snare_perc"].append(event_data)
+
+        # 2. Analyze Bass Stem
+        y_bass = stems_raw["bass"]
+        onset_env_bass = librosa.onset.onset_strength(y=y_bass, sr=self.sr)
+        onsets_bass = librosa.onset.onset_detect(
+            onset_envelope=onset_env_bass, sr=self.sr, units='time', backtrack=False, delta=0.15, wait=10
+        )
+        if len(onsets_bass) > 0:
+            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=2.0, min_dur=0.2)
+            for t, d in zip(onsets_bass, durs_bass):
+                events["bass"].append({"start": float(t), "duration": float(d)})
+                
+        # 3. Analyze Vocals Stem
+        y_vocals = stems_raw["vocals"]
+        onset_env_voc = librosa.onset.onset_strength(y=y_vocals, sr=self.sr)
+        onsets_voc = librosa.onset.onset_detect(
+            onset_envelope=onset_env_voc, sr=self.sr, units='time', backtrack=False, delta=0.2, wait=10
+        )
+        if len(onsets_voc) > 0:
+            durs_voc = self._get_event_durations(onsets_voc, onset_env_voc, self.sr, max_dur=4.0, min_dur=0.2)
+            for t, d in zip(onsets_voc, durs_voc):
+                events["vocals_mid"].append({"start": float(t), "duration": float(d)})
+        
+        # 4. Analyze Other (Instruments) Stem
+        y_other = stems_raw["other"]
+        onset_env_inst = librosa.onset.onset_strength(y=y_other, sr=self.sr)
+        onsets_inst = librosa.onset.onset_detect(
+            onset_envelope=onset_env_inst, sr=self.sr, units='time', backtrack=False, delta=0.2, wait=10
+        )
+        if len(onsets_inst) > 0:
+            durs_inst = self._get_event_durations(onsets_inst, onset_env_inst, self.sr, max_dur=4.0, min_dur=0.1)
+            for t, d in zip(onsets_inst, durs_inst):
+                events["instruments"].append({"start": float(t), "duration": float(d)})
+                
+        return events, stems_audio
+
+    def _analyze_stems_hpss(self):
+        """
+        [Legacy] Fallback method using HPSS and DSP filters
         """
         # 1. Separate Harmonic and Percussive
         y_harmonic, y_percussive = librosa.effects.hpss(self.y)
         
         events = {
-            "drums": [],
+            "kick": [],
+            "snare_perc": [],
+            "cymbals": [],
             "bass": [],
-            "melody": []
+            "vocals_mid": [],
+            "instruments": []
         }
         
-        # --- A. Drums (Percussive Component) ---
-        # Use simple onset detection on percussive component
+        # Audio buffers for stems (initialized with zeros)
+        # Using simplified frequency-based filtering to approximate stem audio
+        stems_audio = {k: np.zeros_like(self.y) for k in events.keys()}
+        
+        # --- Prepare Spectral Separators for Audio Generation ---
+        # Note: This is an approximation. Real stem separation requires deep learning.
+        S_full = librosa.stft(self.y)
+        S_h = librosa.stft(y_harmonic)
+        S_p = librosa.stft(y_percussive)
+        freqs = librosa.fft_frequencies(sr=self.sr)
+        
+        # Masks
+        mask_low = freqs < 250
+        mask_mid = (freqs >= 250) & (freqs < 3000)
+        mask_high = freqs >= 3000
+        
+        # 1. Kick: Low freq percussive
+        stems_audio["kick"] = librosa.istft(S_p * mask_low[:, np.newaxis])
+        
+        # 2. Cymbals: High freq percussive
+        stems_audio["cymbals"] = librosa.istft(S_p * mask_high[:, np.newaxis])
+        
+        # 3. Snare/Perc: Mid freq percussive
+        stems_audio["snare_perc"] = librosa.istft(S_p * mask_mid[:, np.newaxis])
+        
+        # 4. Bass: Low freq harmonic
+        stems_audio["bass"] = librosa.istft(S_h * mask_low[:, np.newaxis])
+        
+        # 5. Vocals/Instruments: Split harmonic > 250Hz based on onset events
+        # We will fill these buffers dynamically based on event classification
+        y_harmonic_high = librosa.istft(S_h * (~mask_low)[:, np.newaxis])
+        
+        # Noise Gate Thresholds
+        NOISE_THRESH_RMS = 0.02 
+        
+        # --- A. Drums Analysis (Kick vs Snare vs Cymbals) ---
         onset_env_perc = librosa.onset.onset_strength(y=y_percussive, sr=self.sr)
-        onsets_perc = librosa.onset.onset_detect(onset_envelope=onset_env_perc, sr=self.sr, units='time', backtrack=True)
+        onsets_perc = librosa.onset.onset_detect(
+            onset_envelope=onset_env_perc, 
+            sr=self.sr, 
+            units='time', 
+            backtrack=True,
+            delta=0.1,  # [New] Reduced sensitivity for cleaner hits
+            wait=5      # [New] Min distance approx 110ms
+        )
         
         if len(onsets_perc) > 0:
-            # Drums duration is usually short
             durs_perc = self._get_event_durations(onsets_perc, onset_env_perc, self.sr, max_dur=0.4, min_dur=0.05)
-            for t, d in zip(onsets_perc, durs_perc):
-                events["drums"].append({
-                    "start": float(t),
-                    "duration": float(d)
-                })
+            onset_samples = librosa.time_to_samples(onsets_perc, sr=self.sr)
+            
+            for t, d, s_idx in zip(onsets_perc, durs_perc, onset_samples):
+                e_idx = min(len(self.y), s_idx + int(0.1 * self.sr))
+                segment = self.y[s_idx:e_idx]
+                
+                if np.sqrt(np.mean(segment**2)) < NOISE_THRESH_RMS: continue
+                
+                timbre = self._analyze_event_timbre(segment, self.sr)
+                event_data = {"start": float(t), "duration": float(d)}
+                
+                if timbre['centroid'] < 1500:
+                    events["kick"].append(event_data)
+                elif timbre['centroid'] > 3500 and timbre['flatness'] > 0.05:
+                    events["cymbals"].append(event_data)
+                else:
+                    events["snare_perc"].append(event_data)
 
         # --- B. Bass (Low Freq Harmonic) ---
-        # Low-pass filter harmonic component to isolate bass (< 250 Hz)
-        # Using a simple spectral cut for efficiency
-        S_h = librosa.stft(y_harmonic)
-        freqs = librosa.fft_frequencies(sr=self.sr)
-        bass_mask = freqs < 250
-        S_bass = S_h * bass_mask[:, np.newaxis]
-        y_bass = librosa.istft(S_bass)
-        
-        onset_env_bass = librosa.onset.onset_strength(y=y_bass, sr=self.sr)
-        onsets_bass = librosa.onset.onset_detect(onset_envelope=onset_env_bass, sr=self.sr, units='time', backtrack=False)
+        onset_env_bass = librosa.onset.onset_strength(y=stems_audio["bass"], sr=self.sr)
+        onsets_bass = librosa.onset.onset_detect(
+            onset_envelope=onset_env_bass, sr=self.sr, units='time', backtrack=False, delta=0.15, wait=10
+        )
         
         if len(onsets_bass) > 0:
-            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=2.0)
-            for t, d in zip(onsets_bass, durs_bass):
-                events["bass"].append({
-                    "start": float(t),
-                    "duration": float(d)
-                })
+            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=2.0, min_dur=0.2)
+            onset_samples_bass = librosa.time_to_samples(onsets_bass, sr=self.sr)
+            
+            for t, d, s_idx in zip(onsets_bass, durs_bass, onset_samples_bass):
+                dur_samples = int(d * self.sr)
+                e_idx = min(len(self.y), s_idx + dur_samples)
+                segment = self.y[s_idx:e_idx]
+                
+                if np.sqrt(np.mean(segment**2)) < NOISE_THRESH_RMS: continue
+                    
+                events["bass"].append({"start": float(t), "duration": float(d)})
 
-        # --- C. Melody/Other (High Freq Harmonic) ---
-        # High-pass filter (> 250 Hz)
-        melody_mask = freqs >= 250
-        S_melody = S_h * melody_mask[:, np.newaxis]
-        y_melody = librosa.istft(S_melody)
-        
-        onset_env_mel = librosa.onset.onset_strength(y=y_melody, sr=self.sr)
-        onsets_mel = librosa.onset.onset_detect(onset_envelope=onset_env_mel, sr=self.sr, units='time', backtrack=False)
+        # --- C. Melodic Content (Vocals vs Instruments) ---
+        onset_env_mel = librosa.onset.onset_strength(y=y_harmonic_high, sr=self.sr)
+        onsets_mel = librosa.onset.onset_detect(
+            onset_envelope=onset_env_mel, sr=self.sr, units='time', backtrack=False, delta=0.2, wait=10
+        )
         
         if len(onsets_mel) > 0:
-            durs_mel = self._get_event_durations(onsets_mel, onset_env_mel, self.sr, max_dur=4.0)
-            for t, d in zip(onsets_mel, durs_mel):
-                events["melody"].append({
-                    "start": float(t),
-                    "duration": float(d)
-                })
+            durs_mel = self._get_event_durations(onsets_mel, onset_env_mel, self.sr, max_dur=4.0, min_dur=0.2)
+            onset_samples_mel = librosa.time_to_samples(onsets_mel, sr=self.sr)
+            
+            fade_len = int(0.01 * self.sr) # 10ms fade for smooth stitching
+            
+            for t, d, s_idx in zip(onsets_mel, durs_mel, onset_samples_mel):
+                dur_samples = int(d * self.sr)
+                e_idx = min(len(self.y), s_idx + dur_samples)
+                segment = self.y[s_idx:e_idx]
                 
-        return events
+                if np.sqrt(np.mean(segment**2)) < NOISE_THRESH_RMS: continue
+                
+                timbre = self._analyze_event_timbre(segment, self.sr)
+                event_data = {"start": float(t), "duration": float(d)}
+                
+                # Audio Extraction Window
+                # We extract the segment from y_harmonic_high and add it to the respective stem buffer
+                # Apply simple fade in/out to avoid clicks
+                segment_audio = y_harmonic_high[s_idx:e_idx]
+                if len(segment_audio) > fade_len * 2:
+                    window = np.ones(len(segment_audio))
+                    window[:fade_len] = np.linspace(0, 1, fade_len)
+                    window[-fade_len:] = np.linspace(1, 0, fade_len)
+                    segment_audio = segment_audio * window
+                
+                if 800 < timbre['centroid'] < 3000 and d > 0.3:
+                    events["vocals_mid"].append(event_data)
+                    # Add to vocal audio buffer
+                    end_safe = s_idx + len(segment_audio)
+                    stems_audio["vocals_mid"][s_idx:end_safe] += segment_audio
+                else:
+                    events["instruments"].append(event_data)
+                    # Add to instrument audio buffer
+                    end_safe = s_idx + len(segment_audio)
+                    stems_audio["instruments"][s_idx:end_safe] += segment_audio
+                
+        return events, stems_audio
+
+    def analyze_stems(self):
+        """
+        Main Entry Point for Stem Analysis.
+        Tries to use Demucs (Deep Learning) first.
+        Falls back to HPSS (DSP) if Demucs fails or is unavailable.
+        """
+        if DEMUCS_AVAILABLE:
+            try:
+                print("Attempting to use Demucs for analysis...")
+                return self._analyze_stems_demucs()
+            except Exception as e:
+                print(f"Demucs analysis failed: {e}")
+        
+        print("Falling back to standard HPSS analysis...")
+        return self._analyze_stems_hpss()
 
     def export_analysis_data(self, source_filename="audio.wav"):
         """[保留功能] 生成分析报告文档"""

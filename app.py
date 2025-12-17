@@ -7,10 +7,103 @@ import io
 import os
 import tempfile
 import json
+import plotly.express as px
+import plotly.graph_objects as go
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.ticker as ticker
 from division import AudioRemixer
+
+# --- Analysis Helper Functions ---
+def analyze_rhythm_structure(events, duration):
+    """
+    Generate statistical insights from rhythm data
+    """
+    stats = {}
+    for instr, ev_list in events.items():
+        if not ev_list:
+            stats[instr] = {
+                "count": 0, 
+                "density_ppm": 0, 
+                "avg_dur_ms": 0, 
+                "active_ratio_pct": 0,
+                "avg_gap_ms": 0
+            }
+            continue
+            
+        count = len(ev_list)
+        total_active_time = sum(e['duration'] for e in ev_list)
+        avg_dur = total_active_time / count if count > 0 else 0
+        density = count / duration * 60  # events per minute
+        active_ratio = total_active_time / duration * 100
+        
+        # Calculate intervals (silence between notes)
+        intervals = []
+        for i in range(len(ev_list) - 1):
+            gap = ev_list[i+1]['start'] - (ev_list[i]['start'] + ev_list[i]['duration'])
+            if gap > 0: intervals.append(gap)
+        avg_interval = np.mean(intervals) if intervals else 0
+        
+        stats[instr] = {
+            "count": count,
+            "density_ppm": round(density, 1), # parts per minute
+            "avg_dur_ms": round(avg_dur * 1000, 1),
+            "active_ratio_pct": round(active_ratio, 1),
+            "avg_gap_ms": round(avg_interval * 1000, 1)
+        }
+    return stats
+
+def generate_text_report(stats):
+    """
+    Generate a natural language summary of the analysis - Dynamic for any instruments
+    """
+    report = []
+    
+    if not stats:
+        return "No analysis data available."
+
+    # 1. Dominant Instrument
+    densities = {k: v['density_ppm'] for k, v in stats.items()}
+    if densities:
+        dominant = max(densities, key=densities.get)
+        report.append(f"**Dominant Element:** The **{dominant.capitalize()}** leads the texture with the highest rhythmic density ({densities[dominant]} events/min).")
+    
+    # 2. Instrument Roles (Dynamic)
+    sorted_instrs = sorted(stats.items(), key=lambda x: x[1]['active_ratio_pct'], reverse=True)
+    
+    for instr, data in sorted_instrs:
+        name = instr.capitalize()
+        active = data['active_ratio_pct']
+        avg_dur = data['avg_dur_ms']
+        
+        desc = ""
+        if active > 50:
+            desc = f"Main sustained layer ({active}% active)"
+        elif active > 20:
+            desc = f"Core rhythmic element ({active}% active)"
+        else:
+            desc = f"Sparse accents or fills ({active}% active)"
+            
+        if avg_dur > 500:
+            desc += " with long, sustained notes."
+        elif avg_dur < 100:
+            desc += " with short, percussive hits."
+        else:
+            desc += "."
+            
+        report.append(f"- **{name}:** {desc}")
+        
+    # 3. Complexity
+    total_events = sum(s['count'] for s in stats.values())
+    if total_events > 300:
+        report.append("**Overall Texture:** High complexity with frequent interplay between layers.")
+    elif total_events < 100:
+        report.append("**Overall Texture:** Minimalist and spacious.")
+    else:
+        report.append("**Overall Texture:** Balanced rhythmic structure.")
+        
+    return "\n\n".join(report)
 
 st.set_page_config(layout="wide", page_title="LoopHunter - Final UI")
 
@@ -37,6 +130,7 @@ st.title("🎛️ Audio Loop & Remix Studio")
 
 if 'remixer' not in st.session_state: st.session_state.remixer = None
 if 'stem_events' not in st.session_state: st.session_state.stem_events = None
+if 'stem_audio' not in st.session_state: st.session_state.stem_audio = None  # [New] Store audio for stems
 if 'timeline' not in st.session_state: st.session_state.timeline = None
 if 'final_audio' not in st.session_state: st.session_state.final_audio = None
 if 'final_dur' not in st.session_state: st.session_state.final_dur = 0.0
@@ -66,37 +160,140 @@ def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
     plt.tight_layout(pad=0)
     return fig
 
-def plot_instrument_timeline(events, total_duration):
-    fig, ax = plt.subplots(figsize=(12, 3))
-    fig.patch.set_facecolor('#0d1117')
-    ax.set_facecolor('#161b22')
+def plot_combined_waveforms(full_y, stems_audio, sr):
+    fig = go.Figure()
+    step = max(1, len(full_y) // 5000) # Target ~5k points for performance
     
-    y_map = {'melody': 2, 'bass': 1, 'drums': 0}
-    colors = {'melody': '#d2a8ff', 'bass': '#79c0ff', 'drums': '#ff7b72'}
+    # Time axis
+    time_axis = np.arange(0, len(full_y), step) / sr
     
-    for instr, ev_list in events.items():
-        y_pos = y_map.get(instr, -1)
-        if y_pos == -1: continue
-        c = colors.get(instr, 'white')
-        for ev in ev_list:
-            start = ev['start']
-            dur = ev['duration']
-            rect = patches.Rectangle((start, y_pos - 0.25), dur, 0.5, 
-                                     facecolor=c, alpha=0.8, edgecolor=None)
-            ax.add_patch(rect)
+    # 1. Full Mix (Background)
+    fig.add_trace(go.Scatter(
+        x=time_axis, y=full_y[::step],
+        name="Full Mix",
+        line=dict(color='gray', width=1),
+        opacity=0.5
+    ))
+    
+    # 2. Stems
+    colors = px.colors.qualitative.Plotly
+    for i, (name, y) in enumerate(stems_audio.items()):
+        if len(y) == 0 or np.max(np.abs(y)) < 0.01: continue
+        # Downsample stem to match full mix length logic
+        y_down = y[::step]
+        # Ensure lengths match
+        min_len = min(len(time_axis), len(y_down))
+        
+        fig.add_trace(go.Scatter(
+            x=time_axis[:min_len], y=y_down[:min_len],
+            name=name.capitalize(),
+            line=dict(color=colors[i % len(colors)], width=1),
+            opacity=0.8,
+            visible='legendonly' # Hide by default to keep it clean
+        ))
+        
+    fig.update_layout(
+        title="Combined Waveform View (Click legend to show/hide tracks)",
+        xaxis_title="Time (s)",
+        yaxis_title="Amplitude",
+        template="plotly_dark",
+        height=400,
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    return fig
+
+def plot_single_stem_waveform(y, sr, color):
+    step = max(1, len(y) // 3000)
+    y_down = y[::step]
+    x_down = np.arange(0, len(y), step) / sr
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x_down, y=y_down,
+        mode='lines',
+        line=dict(color=color, width=1),
+        fill='tozeroy'
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        height=120,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=False,
+        xaxis=dict(visible=False, fixedrange=True),
+        yaxis=dict(visible=False, fixedrange=True),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
+    return fig
+
+def plot_instrument_timeline_interactive(events, total_duration):
+    """
+    使用 Plotly 绘制交互式乐器节奏图 (Gantt-like chart) - 支持任意乐器键名
+    """
+    # 1. 转换数据为 DataFrame
+    data = []
+    
+    # 动态生成颜色映射
+    # 使用 Plotly 默认色板或自定义色板循环
+    color_palette = px.colors.qualitative.Pastel
+    unique_instruments = sorted(list(events.keys()))
+    colors_map = {instr.capitalize(): color_palette[i % len(color_palette)] for i, instr in enumerate(unique_instruments)}
+    
+    # 覆盖默认颜色以保持一致性 (如果存在)
+    default_colors = {'Melody': '#d2a8ff', 'Bass': '#79c0ff', 'Drums': '#ff7b72'}
+    for k, v in default_colors.items():
+        if k in colors_map:
+            colors_map[k] = v
             
-    ax.set_yticks([0, 1, 2])
-    ax.set_yticklabels(['Drums', 'Bass', 'Melody'], color='#c9d1d9')
-    ax.set_xlim(0, total_duration)
-    ax.set_xlabel("Time (s)", color='#8b949e')
-    ax.tick_params(axis='x', colors='#8b949e')
-    ax.grid(True, axis='x', color='#30363d', linestyle='--', alpha=0.5)
+    for instr, ev_list in events.items():
+        for ev in ev_list:
+            data.append(dict(
+                Instrument=instr.capitalize(),
+                Start=ev['start'],
+                End=ev['start'] + ev['duration'],
+                Duration=ev['duration']
+            ))
+            
+    if not data:
+        return None
+        
+    df = pd.DataFrame(data)
     
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.spines['bottom'].set_color('#30363d')
-    plt.tight_layout()
+    # 2. 绘制 Gantt 图 (使用 px.bar)
+    fig = px.bar(
+        df, 
+        base="Start", 
+        x="Duration", 
+        y="Instrument", 
+        color="Instrument",
+        orientation='h',
+        color_discrete_map=colors_map,
+        hover_data={"Start": ":.2f", "End": ":.2f", "Duration": ":.2f", "Instrument": False},
+        height=300
+    )
+    
+    # 3. 布局美化
+    fig.update_layout(
+        xaxis=dict(
+            title="Time (s)",
+            showgrid=True,
+            gridcolor='#30363d',
+            zerolinecolor='#30363d',
+            range=[0, total_duration]
+        ),
+        yaxis=dict(
+            title="",
+            categoryorder='total ascending' # 按活跃度排序
+        ),
+        plot_bgcolor='#0d1117',
+        paper_bgcolor='#0d1117',
+        font=dict(color='#c9d1d9'),
+        margin=dict(l=10, r=10, t=30, b=30),
+        showlegend=False,
+        hovermode='closest'
+    )
+    
     return fig
 
 def plot_remix_waveform(remix_y, sr, timeline, total_remix_dur):
@@ -163,7 +360,11 @@ with st.sidebar:
                 remixer = AudioRemixer(tpath)
                 remixer.analyze()
                 st.session_state.remixer = remixer
-                st.session_state.stem_events = remixer.analyze_stems()
+                # [Update] Unpack events and audio
+                events, stems_audio = remixer.analyze_stems()
+                st.session_state.stem_events = events
+                st.session_state.stem_audio = stems_audio
+                
                 st.session_state.timeline = None
                 st.session_state.final_audio = None
                 st.session_state.loop_page = 0 
@@ -256,9 +457,96 @@ if st.session_state.remixer:
     if st.session_state.stem_events:
         st.divider()
         st.subheader("3. Instrument Rhythm Breakdown")
-        st.caption("Visualizing onset and duration for Drums, Bass, and Melody.")
-        fig_inst = plot_instrument_timeline(st.session_state.stem_events, remixer.duration)
-        st.pyplot(fig_inst)
+        st.caption("Interactive visualization: Zoom, Pan, and Hover to see details.")
+        
+        # Plotly Chart
+        fig_inst = plot_instrument_timeline_interactive(st.session_state.stem_events, remixer.duration)
+        if fig_inst:
+            st.plotly_chart(fig_inst, use_container_width=True)
+            
+        # Download Data
+        st.write("#### Download Rhythm Data")
+        c1, c2 = st.columns(2)
+        
+        # Prepare JSON
+        rhythm_json = json.dumps(st.session_state.stem_events, indent=4)
+        
+        # Prepare Excel/CSV friendly format
+        flat_data = []
+        for instr, ev_list in st.session_state.stem_events.items():
+            for ev in ev_list:
+                flat_data.append({
+                    "Instrument": instr,
+                    "Start (s)": round(ev['start'], 4),
+                    "Duration (s)": round(ev['duration'], 4),
+                    "End (s)": round(ev['start'] + ev['duration'], 4)
+                })
+        df_rhythm = pd.DataFrame(flat_data)
+        csv_data = df_rhythm.to_csv(index=False).encode('utf-8')
+        
+        with c1:
+            st.download_button(
+                label="📥 Download JSON",
+                data=rhythm_json,
+                file_name="instrument_rhythm.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        with c2:
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv_data,
+                file_name="instrument_rhythm.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+        # Analysis Report
+        st.write("#### 📊 Structural Analysis Report")
+        stats = analyze_rhythm_structure(st.session_state.stem_events, remixer.duration)
+        
+        # --- NEW: Combined Waveform ---
+        if st.session_state.stem_audio:
+            st.subheader("Waveform Overview")
+            fig_combined = plot_combined_waveforms(remixer.y, st.session_state.stem_audio, remixer.sr)
+            st.plotly_chart(fig_combined, use_container_width=True)
+            
+            st.write("#### Individual Stems Breakdown")
+            # Generate Colors
+            colors_list = px.colors.qualitative.Plotly
+            
+            for i, (instr, data) in enumerate(stats.items()):
+                # Create a container for each stem
+                with st.container():
+                    col_info, col_wave = st.columns([1, 3])
+                    
+                    # Info Column
+                    with col_info:
+                        st.markdown(f"**{instr.capitalize()}**")
+                        st.caption(f"Density: {data['density_ppm']} ppm")
+                        st.caption(f"Active: {data['active_ratio_pct']}%")
+                        
+                        # Player
+                        if instr in st.session_state.stem_audio:
+                            stem_y = st.session_state.stem_audio[instr]
+                            if np.any(stem_y):
+                                max_val = np.max(np.abs(stem_y))
+                                if max_val > 0: stem_y = stem_y / max_val * 0.95
+                                buf = io.BytesIO()
+                                sf.write(buf, stem_y, remixer.sr, format='WAV')
+                                st.audio(buf.getvalue(), format='audio/wav')
+                    
+                    # Waveform Column
+                    with col_wave:
+                        if instr in st.session_state.stem_audio:
+                            color = colors_list[i % len(colors_list)]
+                            fig_stem = plot_single_stem_waveform(st.session_state.stem_audio[instr], remixer.sr, color)
+                            st.plotly_chart(fig_stem, use_container_width=True, config={'displayModeBar': False})
+                    
+                    st.divider()
+        
+        # Text Report
+        st.info(generate_text_report(stats))
 
     if st.session_state.timeline:
         st.divider()
