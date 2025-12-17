@@ -105,14 +105,18 @@ class AudioRemixer:
         
         return target_sample
 
-    def _get_event_durations(self, onsets, envelope, sr, max_dur=2.0, min_dur=0.1, silence_thresh=0.01):
+    def _get_event_durations(self, onsets, envelope, sr, max_dur=2.0, min_dur=0.1, silence_thresh=0.01, energy_envelope=None):
         """
         [新增] 根据能量包络计算每个事件的持续时间
         silence_thresh: 包络能量的最低阈值，防止追踪到底噪
+        energy_envelope: (可选) RMS 能量包络，用于更精确的延音判定。如果未提供，使用 envelope (onset_strength)。
         """
         durations = []
         n_frames = len(envelope)
         onset_frames = librosa.time_to_frames(onsets, sr=sr)
+        
+        # 使用 RMS 包络作为衰减判定依据，如果不可用则回退到 onset_envelope
+        ref_envelope = energy_envelope if energy_envelope is not None else envelope
         
         for i, start_frame in enumerate(onset_frames):
             # 确定硬性边界（下一个音符开始或最大时长）
@@ -130,24 +134,28 @@ class AudioRemixer:
                 continue
 
             # 找到局部峰值（onset 触发后能量可能会继续上升一点）
-            lookahead = 5 # frames
+            # 注意：如果 ref_envelope 是 RMS，峰值可能稍微滞后于 onset
+            lookahead = 10 # frames (approx 100ms)
             local_search_end = min(n_frames, start_frame + lookahead)
+            
+            peak_idx = start_frame
+            peak_val = ref_envelope[start_frame]
+            
             if local_search_end > start_frame:
-                peak_offset = np.argmax(envelope[start_frame:local_search_end])
+                # 在起始点后寻找最大能量点
+                peak_offset = np.argmax(ref_envelope[start_frame:local_search_end])
                 peak_idx = start_frame + peak_offset
-                peak_val = envelope[peak_idx]
-            else:
-                peak_idx = start_frame
-                peak_val = envelope[start_frame]
+                peak_val = ref_envelope[peak_idx]
             
             # 寻找能量衰减点 (阈值法)
-            # 动态阈值: 峰值的25% 或 底噪水平，取较大值
-            threshold = max(peak_val * 0.25, silence_thresh)
+            # 动态阈值: 峰值的 20% (约为 -14dB衰减) 或 底噪水平
+            # 对于持续性乐器，我们希望追踪到它衰减到较低水平
+            threshold = max(peak_val * 0.20, silence_thresh)
             end_frame = actual_limit
             
             # 从峰值开始向后搜索
             for f in range(peak_idx, actual_limit):
-                if envelope[f] < threshold:
+                if ref_envelope[f] < threshold:
                     end_frame = f
                     break
             
@@ -369,12 +377,16 @@ class AudioRemixer:
         # 1. Analyze Drums Stem (Split into Kick/Snare/Cymbals)
         y_drums = stems_raw["drums"]
         onset_env_drums = librosa.onset.onset_strength(y=y_drums, sr=self.sr)
+        # Compute RMS for duration calculation
+        rms_drums = librosa.feature.rms(y=y_drums, frame_length=2048, hop_length=512)[0]
+        
         onsets_drums = librosa.onset.onset_detect(
             onset_envelope=onset_env_drums, sr=self.sr, units='time', backtrack=True, delta=0.1, wait=5
         )
         
         if len(onsets_drums) > 0:
-            durs_drums = self._get_event_durations(onsets_drums, onset_env_drums, self.sr, max_dur=0.4, min_dur=0.05)
+            # Use RMS for duration
+            durs_drums = self._get_event_durations(onsets_drums, onset_env_drums, self.sr, max_dur=0.6, min_dur=0.05, energy_envelope=rms_drums)
             onset_samples = librosa.time_to_samples(onsets_drums, sr=self.sr)
             
             # Prepare spectral separation for drums audio only
@@ -411,33 +423,36 @@ class AudioRemixer:
         # 2. Analyze Bass Stem
         y_bass = stems_raw["bass"]
         onset_env_bass = librosa.onset.onset_strength(y=y_bass, sr=self.sr)
+        rms_bass = librosa.feature.rms(y=y_bass, frame_length=2048, hop_length=512)[0]
         onsets_bass = librosa.onset.onset_detect(
             onset_envelope=onset_env_bass, sr=self.sr, units='time', backtrack=False, delta=0.15, wait=10
         )
         if len(onsets_bass) > 0:
-            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=2.0, min_dur=0.2)
+            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=3.0, min_dur=0.2, energy_envelope=rms_bass)
             for t, d in zip(onsets_bass, durs_bass):
                 events["bass"].append({"start": float(t), "duration": float(d)})
                 
         # 3. Analyze Vocals Stem
         y_vocals = stems_raw["vocals"]
         onset_env_voc = librosa.onset.onset_strength(y=y_vocals, sr=self.sr)
+        rms_voc = librosa.feature.rms(y=y_vocals, frame_length=2048, hop_length=512)[0]
         onsets_voc = librosa.onset.onset_detect(
             onset_envelope=onset_env_voc, sr=self.sr, units='time', backtrack=False, delta=0.2, wait=10
         )
         if len(onsets_voc) > 0:
-            durs_voc = self._get_event_durations(onsets_voc, onset_env_voc, self.sr, max_dur=4.0, min_dur=0.2)
+            durs_voc = self._get_event_durations(onsets_voc, onset_env_voc, self.sr, max_dur=5.0, min_dur=0.3, energy_envelope=rms_voc)
             for t, d in zip(onsets_voc, durs_voc):
                 events["vocals_mid"].append({"start": float(t), "duration": float(d)})
         
         # 4. Analyze Other (Instruments) Stem
         y_other = stems_raw["other"]
         onset_env_inst = librosa.onset.onset_strength(y=y_other, sr=self.sr)
+        rms_inst = librosa.feature.rms(y=y_other, frame_length=2048, hop_length=512)[0]
         onsets_inst = librosa.onset.onset_detect(
             onset_envelope=onset_env_inst, sr=self.sr, units='time', backtrack=False, delta=0.2, wait=10
         )
         if len(onsets_inst) > 0:
-            durs_inst = self._get_event_durations(onsets_inst, onset_env_inst, self.sr, max_dur=4.0, min_dur=0.1)
+            durs_inst = self._get_event_durations(onsets_inst, onset_env_inst, self.sr, max_dur=5.0, min_dur=0.2, energy_envelope=rms_inst)
             for t, d in zip(onsets_inst, durs_inst):
                 events["instruments"].append({"start": float(t), "duration": float(d)})
                 
