@@ -518,7 +518,7 @@ if st.session_state.remixer:
             for i, (instr, data) in enumerate(stats.items()):
                 # Create a container for each stem
                 with st.container():
-                    col_info, col_wave = st.columns([1, 3])
+                    col_info, col_wave = st.columns([1, 5])
                     
                     # Info Column
                     with col_info:
@@ -526,8 +526,14 @@ if st.session_state.remixer:
                         st.caption(f"Density: {data['density_ppm']} ppm")
                         st.caption(f"Active: {data['active_ratio_pct']}%")
                         
-                        # Player
+                    # Waveform & Player Column
+                    with col_wave:
                         if instr in st.session_state.stem_audio:
+                            color = colors_list[i % len(colors_list)]
+                            fig_stem = plot_single_stem_waveform(st.session_state.stem_audio[instr], remixer.sr, color)
+                            st.plotly_chart(fig_stem, use_container_width=True, config={'displayModeBar': False})
+                            
+                            # Player - Now in the wider column for better seek bar
                             stem_y = st.session_state.stem_audio[instr]
                             if np.any(stem_y):
                                 max_val = np.max(np.abs(stem_y))
@@ -535,13 +541,6 @@ if st.session_state.remixer:
                                 buf = io.BytesIO()
                                 sf.write(buf, stem_y, remixer.sr, format='WAV')
                                 st.audio(buf.getvalue(), format='audio/wav')
-                    
-                    # Waveform Column
-                    with col_wave:
-                        if instr in st.session_state.stem_audio:
-                            color = colors_list[i % len(colors_list)]
-                            fig_stem = plot_single_stem_waveform(st.session_state.stem_audio[instr], remixer.sr, color)
-                            st.plotly_chart(fig_stem, use_container_width=True, config={'displayModeBar': False})
                     
                     st.divider()
         
