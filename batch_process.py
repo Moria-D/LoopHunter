@@ -90,6 +90,10 @@ def main():
     total_start_time = time.time()
     all_info = {}
 
+    # Run Stem Analysis ONCE
+    print("Analyzing instrument stems (Drums/Bass/Melody)...")
+    stem_events = remixer.analyze_stems()
+    
     # Iterate through each second
     for target_dur in range(start_target, end_target + 1):
         iter_start_time = time.time()
@@ -119,21 +123,55 @@ def main():
             # 3. Save Waveform
             save_remix_waveform(audio, remixer.sr, timeline, actual_dur, image_out_path)
             
-            # 4. Collect Jump Points
+            # 4. Collect Jump Points, Composition, and Instrument Events
             jump_points = []
+            composition = []
+            
+            # Map Stem Events to Remix Timeline
+            remix_stem_events = {k: [] for k in stem_events.keys()}
+            
             for seg in timeline:
-                 if seg.get('xfade', 0) > 0 or seg.get('is_jump') or seg['type'] == 'Loop Extension':
+                # Jump Points
+                if seg.get('xfade', 0) > 0 or seg.get('is_jump') or seg['type'] == 'Loop Extension':
                      jump_points.append({
                          'time': round(seg['remix_start'], 2),
                          'type': seg['type'],
                          'xfade': seg.get('xfade', 0)
                      })
-            
+                
+                # Composition
+                content_type = remixer._classify_segment(seg['source_start'], seg['source_end'])
+                composition.append({
+                    "start": round(seg['remix_start'], 2),
+                    "duration": round(seg['duration'], 2),
+                    "content_type": content_type,
+                    "structure_type": seg['type']
+                })
+                
+                # Map Stem Events
+                # For this segment (source_start -> source_end), find events in source
+                seg_s = seg['source_start']
+                seg_e = seg['source_end']
+                remix_offset = seg['remix_start'] - seg_s
+                
+                for inst_name, events in stem_events.items():
+                    for evt in events:
+                        # Check if event start is within this source segment
+                        # Relax boundary slightly for events starting right on edge
+                        if evt['start'] >= seg_s and evt['start'] < seg_e:
+                            mapped_evt = {
+                                "start": round(evt['start'] + remix_offset, 3),
+                                "duration": round(evt['duration'], 3)
+                            }
+                            remix_stem_events[inst_name].append(mapped_evt)
+
             all_info[str(target_dur)] = {
                 "target_duration": target_dur,
                 "actual_duration": round(actual_dur, 2),
-                "process_time": round(time.time() - iter_start_time, 4), # Add processing time
+                "process_time": round(time.time() - iter_start_time, 4),
                 "jump_points": jump_points,
+                "composition": composition,
+                "instrument_events": remix_stem_events, # Added mapped events
                 "files": {
                     "audio": audio_filename,
                     "image": image_filename

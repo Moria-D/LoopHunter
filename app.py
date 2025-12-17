@@ -36,6 +36,7 @@ st.markdown("""
 st.title("🎛️ Audio Loop & Remix Studio")
 
 if 'remixer' not in st.session_state: st.session_state.remixer = None
+if 'stem_events' not in st.session_state: st.session_state.stem_events = None
 if 'timeline' not in st.session_state: st.session_state.timeline = None
 if 'final_audio' not in st.session_state: st.session_state.final_audio = None
 if 'final_dur' not in st.session_state: st.session_state.final_dur = 0.0
@@ -63,6 +64,39 @@ def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
     ax.set_xlim(0, len(y_subs)/sr_subs)
     for spine in ax.spines.values(): spine.set_visible(False)
     plt.tight_layout(pad=0)
+    return fig
+
+def plot_instrument_timeline(events, total_duration):
+    fig, ax = plt.subplots(figsize=(12, 3))
+    fig.patch.set_facecolor('#0d1117')
+    ax.set_facecolor('#161b22')
+    
+    y_map = {'melody': 2, 'bass': 1, 'drums': 0}
+    colors = {'melody': '#d2a8ff', 'bass': '#79c0ff', 'drums': '#ff7b72'}
+    
+    for instr, ev_list in events.items():
+        y_pos = y_map.get(instr, -1)
+        if y_pos == -1: continue
+        c = colors.get(instr, 'white')
+        for ev in ev_list:
+            start = ev['start']
+            dur = ev['duration']
+            rect = patches.Rectangle((start, y_pos - 0.25), dur, 0.5, 
+                                     facecolor=c, alpha=0.8, edgecolor=None)
+            ax.add_patch(rect)
+            
+    ax.set_yticks([0, 1, 2])
+    ax.set_yticklabels(['Drums', 'Bass', 'Melody'], color='#c9d1d9')
+    ax.set_xlim(0, total_duration)
+    ax.set_xlabel("Time (s)", color='#8b949e')
+    ax.tick_params(axis='x', colors='#8b949e')
+    ax.grid(True, axis='x', color='#30363d', linestyle='--', alpha=0.5)
+    
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_color('#30363d')
+    plt.tight_layout()
     return fig
 
 def plot_remix_waveform(remix_y, sr, timeline, total_remix_dur):
@@ -129,6 +163,7 @@ with st.sidebar:
                 remixer = AudioRemixer(tpath)
                 remixer.analyze()
                 st.session_state.remixer = remixer
+                st.session_state.stem_events = remixer.analyze_stems()
                 st.session_state.timeline = None
                 st.session_state.final_audio = None
                 st.session_state.loop_page = 0 
@@ -217,6 +252,13 @@ if st.session_state.remixer:
                 st.rerun()
     else:
         st.info("No loops detected.")
+
+    if st.session_state.stem_events:
+        st.divider()
+        st.subheader("3. Instrument Rhythm Breakdown")
+        st.caption("Visualizing onset and duration for Drums, Bass, and Melody.")
+        fig_inst = plot_instrument_timeline(st.session_state.stem_events, remixer.duration)
+        st.pyplot(fig_inst)
 
     if st.session_state.timeline:
         st.divider()

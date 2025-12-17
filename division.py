@@ -96,6 +96,60 @@ class AudioRemixer:
         
         return target_sample
 
+    def _get_event_durations(self, onsets, envelope, sr, max_dur=2.0, min_dur=0.1):
+        """
+        [新增] 根据能量包络计算每个事件的持续时间
+        """
+        durations = []
+        n_frames = len(envelope)
+        onset_frames = librosa.time_to_frames(onsets, sr=sr)
+        
+        for i, start_frame in enumerate(onset_frames):
+            # 确定硬性边界（下一个音符开始或最大时长）
+            if i < len(onset_frames) - 1:
+                hard_limit = onset_frames[i+1]
+            else:
+                hard_limit = min(n_frames, start_frame + librosa.time_to_frames(max_dur, sr=sr))
+                
+            # 限制最大搜索范围
+            search_limit = min(n_frames, start_frame + librosa.time_to_frames(max_dur, sr=sr))
+            actual_limit = int(min(hard_limit, search_limit))
+            
+            if start_frame >= n_frames:
+                durations.append(min_dur)
+                continue
+
+            # 找到局部峰值（onset 触发后能量可能会继续上升一点）
+            lookahead = 5 # frames
+            local_search_end = min(n_frames, start_frame + lookahead)
+            if local_search_end > start_frame:
+                peak_offset = np.argmax(envelope[start_frame:local_search_end])
+                peak_idx = start_frame + peak_offset
+                peak_val = envelope[peak_idx]
+            else:
+                peak_idx = start_frame
+                peak_val = envelope[start_frame]
+            
+            # 寻找能量衰减点 (阈值法)
+            threshold = peak_val * 0.25 # 能量降至 25% 视为结束
+            end_frame = actual_limit
+            
+            # 从峰值开始向后搜索
+            for f in range(peak_idx, actual_limit):
+                if envelope[f] < threshold:
+                    end_frame = f
+                    break
+            
+            # 计算时长
+            dur_frames = end_frame - start_frame
+            dur_time = librosa.frames_to_time(dur_frames, sr=sr)
+            
+            # 确保在合理范围内
+            dur_time = max(min_dur, min(dur_time, max_dur))
+            durations.append(dur_time)
+            
+        return durations
+
     def _classify_segment(self, start_time, end_time):
         """[保留功能] 基于音频特征动态分类 Loop 类型"""
         s_idx = int(start_time * self.sr)
@@ -197,6 +251,73 @@ class AudioRemixer:
                                 "type": loop_type
                             })
         self.loops = sorted(self.loops, key=lambda x: x['score'], reverse=True)
+
+    def analyze_stems(self):
+        """
+        Analyze independent stems (Percussive/Harmonic) to find instrument events.
+        Simplified approach without deep learning models (Demucs/Spleeter).
+        """
+        # 1. Separate Harmonic and Percussive
+        y_harmonic, y_percussive = librosa.effects.hpss(self.y)
+        
+        events = {
+            "drums": [],
+            "bass": [],
+            "melody": []
+        }
+        
+        # --- A. Drums (Percussive Component) ---
+        # Use simple onset detection on percussive component
+        onset_env_perc = librosa.onset.onset_strength(y=y_percussive, sr=self.sr)
+        onsets_perc = librosa.onset.onset_detect(onset_envelope=onset_env_perc, sr=self.sr, units='time', backtrack=True)
+        
+        if len(onsets_perc) > 0:
+            # Drums duration is usually short
+            durs_perc = self._get_event_durations(onsets_perc, onset_env_perc, self.sr, max_dur=0.4, min_dur=0.05)
+            for t, d in zip(onsets_perc, durs_perc):
+                events["drums"].append({
+                    "start": float(t),
+                    "duration": float(d)
+                })
+
+        # --- B. Bass (Low Freq Harmonic) ---
+        # Low-pass filter harmonic component to isolate bass (< 250 Hz)
+        # Using a simple spectral cut for efficiency
+        S_h = librosa.stft(y_harmonic)
+        freqs = librosa.fft_frequencies(sr=self.sr)
+        bass_mask = freqs < 250
+        S_bass = S_h * bass_mask[:, np.newaxis]
+        y_bass = librosa.istft(S_bass)
+        
+        onset_env_bass = librosa.onset.onset_strength(y=y_bass, sr=self.sr)
+        onsets_bass = librosa.onset.onset_detect(onset_envelope=onset_env_bass, sr=self.sr, units='time', backtrack=False)
+        
+        if len(onsets_bass) > 0:
+            durs_bass = self._get_event_durations(onsets_bass, onset_env_bass, self.sr, max_dur=2.0)
+            for t, d in zip(onsets_bass, durs_bass):
+                events["bass"].append({
+                    "start": float(t),
+                    "duration": float(d)
+                })
+
+        # --- C. Melody/Other (High Freq Harmonic) ---
+        # High-pass filter (> 250 Hz)
+        melody_mask = freqs >= 250
+        S_melody = S_h * melody_mask[:, np.newaxis]
+        y_melody = librosa.istft(S_melody)
+        
+        onset_env_mel = librosa.onset.onset_strength(y=y_melody, sr=self.sr)
+        onsets_mel = librosa.onset.onset_detect(onset_envelope=onset_env_mel, sr=self.sr, units='time', backtrack=False)
+        
+        if len(onsets_mel) > 0:
+            durs_mel = self._get_event_durations(onsets_mel, onset_env_mel, self.sr, max_dur=4.0)
+            for t, d in zip(onsets_mel, durs_mel):
+                events["melody"].append({
+                    "start": float(t),
+                    "duration": float(d)
+                })
+                
+        return events
 
     def export_analysis_data(self, source_filename="audio.wav"):
         """[保留功能] 生成分析报告文档"""
