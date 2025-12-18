@@ -364,6 +364,7 @@ class AudioRemixer:
         
         # Output Audio Buffers
         stems_audio = {
+            "drums": stems_raw["drums"], # [Fixed] Include full drums stem for drum processor
             "kick": np.zeros_like(self.y),
             "snare_perc": np.zeros_like(self.y),
             "cymbals": np.zeros_like(self.y),
@@ -477,6 +478,7 @@ class AudioRemixer:
         # Audio buffers for stems (initialized with zeros)
         # Using simplified frequency-based filtering to approximate stem audio
         stems_audio = {k: np.zeros_like(self.y) for k in events.keys()}
+        stems_audio["drums"] = y_percussive # [Fixed] Add full percussive as drums stem
         
         # --- Prepare Spectral Separators for Audio Generation ---
         # Note: This is an approximation. Real stem separation requires deep learning.

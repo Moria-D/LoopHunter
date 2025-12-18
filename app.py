@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.ticker as ticker
 from division import AudioRemixer
+from drum_processor import DrumLoopExtractor
 
 # --- Analysis Helper Functions ---
 def analyze_rhythm_structure(events, duration):
@@ -136,6 +137,7 @@ if 'final_audio' not in st.session_state: st.session_state.final_audio = None
 if 'final_dur' not in st.session_state: st.session_state.final_dur = 0.0
 if 'loop_page' not in st.session_state: st.session_state.loop_page = 0
 if 'analysis_report' not in st.session_state: st.session_state.analysis_report = None
+if 'drum_loops' not in st.session_state: st.session_state.drum_loops = None
 
 def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
     fig, ax = plt.subplots(figsize=(10, 1.2)) 
@@ -368,6 +370,7 @@ with st.sidebar:
                 st.session_state.timeline = None
                 st.session_state.final_audio = None
                 st.session_state.loop_page = 0 
+                st.session_state.drum_loops = None
                 json_data, text_data = remixer.export_analysis_data(uploaded_file.name)
                 st.session_state.analysis_report = {"json": json_data, "text": text_data}
                 os.remove(tpath)
@@ -479,7 +482,8 @@ if st.session_state.remixer:
                     "Instrument": instr,
                     "Start (s)": round(ev['start'], 4),
                     "Duration (s)": round(ev['duration'], 4),
-                    "End (s)": round(ev['start'] + ev['duration'], 4)
+                    "End (s)": round(ev['start'] + ev['duration'], 4),
+                    "Remark": ev.get('remark', '')  # [New] Loop info
                 })
         df_rhythm = pd.DataFrame(flat_data)
         csv_data = df_rhythm.to_csv(index=False).encode('utf-8')
@@ -541,8 +545,129 @@ if st.session_state.remixer:
                                 buf = io.BytesIO()
                                 sf.write(buf, stem_y, remixer.sr, format='WAV')
                                 st.audio(buf.getvalue(), format='audio/wav')
+                            
+                            # [New] Sample Event Audition
+                            ev_list = st.session_state.stem_events.get(instr, [])
+                            if ev_list:
+                                with st.expander("🔍 Audition 5 Consecutive Events"):
+                                    # Select 5 consecutive samples
+                                    num_events = len(ev_list)
+                                    if num_events <= 5:
+                                        indices = range(num_events)
+                                    else:
+                                        # Use session state to keep samples stable
+                                        sample_key = f"sample_start_{instr}"
+                                        # Reset if missing or event count changed (new analysis)
+                                        if sample_key not in st.session_state or st.session_state[sample_key]['total'] != num_events:
+                                            st.session_state[sample_key] = {
+                                                'idx': np.random.randint(0, num_events - 4),
+                                                'total': num_events
+                                            }
+                                        
+                                        # Shuffle button
+                                        if st.button("🎲 Randomize Selection", key=f"shuffle_{instr}", help="Pick a new random starting point"):
+                                            st.session_state[sample_key]['idx'] = np.random.randint(0, num_events - 4)
+                                            st.rerun()
+                                            
+                                        start_idx = st.session_state[sample_key]['idx']
+                                        indices = range(start_idx, start_idx + 5)
+                                    
+                                    for idx in indices:
+                                        ev = ev_list[idx]
+                                        start = ev['start']
+                                        dur = ev['duration']
+                                        
+                                        # Padding for better listening (0.05s)
+                                        pad = 0.05
+                                        s_idx = max(0, int((start - pad) * remixer.sr))
+                                        e_idx = min(len(st.session_state.stem_audio[instr]), int((start + dur + pad) * remixer.sr))
+                                        
+                                        clip = st.session_state.stem_audio[instr][s_idx:e_idx]
+                                        
+                                        # Normalize clip
+                                        if len(clip) > 0:
+                                            mx = np.max(np.abs(clip))
+                                            if mx > 0: clip = clip / mx * 0.9
+                                            
+                                            buf_clip = io.BytesIO()
+                                            sf.write(buf_clip, clip, remixer.sr, format='WAV')
+                                            
+                                            c1, c2 = st.columns([1, 4])
+                                            c1.caption(f"#{idx+1} @ {start:.2f}s\n(Len: {dur:.2f}s)")
+                                            c2.audio(buf_clip.getvalue(), format='audio/wav')
                     
                     st.divider()
+
+        # --- NEW: Drum Kit Decomposition ---
+        if 'drums' in st.session_state.stem_audio:
+            st.divider()
+            st.subheader("🥁 Drum Kit Decomposition & Loop Extraction")
+            
+            if st.button("Extract Drum Loops (Kick/Snare/Cymbals)", type="primary"):
+                with st.spinner("Separating drum components and finding loops..."):
+                    extractor = DrumLoopExtractor(sr=remixer.sr)
+                    # Pass beat_times to align loops to grid
+                    drum_loops = extractor.process(st.session_state.stem_audio['drums'], beat_times=remixer.beat_times)
+                    st.session_state.drum_loops = drum_loops
+            
+            if 'drum_loops' in st.session_state and st.session_state.drum_loops:
+                for name, data in st.session_state.drum_loops.items():
+                    with st.expander(f"{name.capitalize()} Analysis", expanded=True):
+                        col_a, col_b = st.columns([1, 3])
+                        
+                        # Audio Player for the component stem
+                        audio_comp = data['audio']
+                        # Normalize for playback
+                        if len(audio_comp) > 0:
+                            mx = np.max(np.abs(audio_comp))
+                            if mx > 0: audio_comp_norm = audio_comp / mx * 0.95
+                            else: audio_comp_norm = audio_comp
+                            
+                            buf = io.BytesIO()
+                            sf.write(buf, audio_comp_norm, remixer.sr, format='WAV')
+                            col_a.write("**Full Stem**")
+                            col_a.audio(buf.getvalue(), format='audio/wav')
+                        
+                        # Loop Info
+                        loop = data['loop']
+                        if loop:
+                            col_b.success(f"Minimum Loop Detected: {loop['duration']:.2f}s (Conf: {loop['confidence']:.2f})")
+                            col_b.caption(f"Start: {loop['start']:.2f}s - End: {loop['end']:.2f}s")
+                            
+                            # Extract Loop Audio
+                            s_samp = int(loop['start'] * remixer.sr)
+                            e_samp = int(loop['end'] * remixer.sr)
+                            loop_chunk = data['audio'][s_samp:e_samp]
+                            
+                            # Repeat 4 times for preview
+                            preview_4x = np.tile(loop_chunk, 4)
+                            
+                            # Normalize
+                            if len(preview_4x) > 0:
+                                mx = np.max(np.abs(preview_4x))
+                                if mx > 0: preview_4x = preview_4x / mx * 0.95
+                                
+                                buf_loop_4x = io.BytesIO()
+                                sf.write(buf_loop_4x, preview_4x, remixer.sr, format='WAV')
+                                
+                                buf_loop_1x = io.BytesIO()
+                                # 1x Preview
+                                loop_chunk_norm = loop_chunk
+                                if mx > 0: loop_chunk_norm = loop_chunk / mx * 0.95
+                                sf.write(buf_loop_1x, loop_chunk_norm, remixer.sr, format='WAV')
+                                
+                                c1, c2 = col_b.columns(2)
+                                c1.write("**Loop Preview (1x)**")
+                                c1.audio(buf_loop_1x.getvalue(), format='audio/wav')
+                                
+                                c2.write("**Loop Preview (4x)**")
+                                c2.audio(buf_loop_4x.getvalue(), format='audio/wav')
+                                
+                            # Waveform of loop
+                            fig_loop = plot_mini_waveform_with_highlight(data['audio'], remixer.sr, loop['start'], loop['end'])
+                            col_b.pyplot(fig_loop)
+                        else:
+                            col_b.warning("No clear loop pattern found.")
         
         # Text Report
         st.info(generate_text_report(stats))
