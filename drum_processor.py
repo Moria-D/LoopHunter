@@ -5,7 +5,7 @@ import scipy.signal
 class DrumLoopExtractor:
     def __init__(self, sr=22050):
         self.sr = sr
-        # 针对不同打击乐器频段的滤波器配置
+        # 精细化滤波频段
         self.bands = {
             'kick': (20, 150),
             'snare_perc': (200, 3500), 
@@ -24,34 +24,35 @@ class DrumLoopExtractor:
                 sos = scipy.signal.butter(4, 150, 'low', fs=self.sr, output='sos')
                 y_filt = scipy.signal.sosfilt(sos, y_filt)
             elif name == 'snare_perc':
-                sos = scipy.signal.butter(4, [200, 3500], 'band', fs=self.sr, output='sos')
+                sos = scipy.signal.butter(4, [250, 4000], 'band', fs=self.sr, output='sos')
                 y_filt = scipy.signal.sosfilt(sos, y_filt)
             elif name == 'cymbals':
-                sos = scipy.signal.butter(4, 3500, 'high', fs=self.sr, output='sos')
+                sos = scipy.signal.butter(4, 4000, 'high', fs=self.sr, output='sos')
                 y_filt = scipy.signal.sosfilt(sos, y_filt)
             components[name] = y_filt
         return components
 
     def find_minimum_loop(self, y_component, duration_sec, component_name="unknown", beat_times=None):
         """
-        全自动动态嗅探版：解决静音提取问题，自动识别循环长度并对齐重拍。
+        全自动动态嗅探增强版：增加 Snare 变奏保护与 Cymbals 平滑对齐
         """
-        # 1. 动态特征提取与门限自适应
+        # 1. 提取强度包络
         onset_env = librosa.onset.onset_strength(y=y_component, sr=self.sr)
-        # 计算动态能量门限，防止将有效鼓点识别为静音
-        rms = librosa.feature.rms(y=y_component)[0]
-        dynamic_thresh = np.percentile(rms, 20) # 取能量分布的低分位作为基准
-
+        
+        # 针对 Snare 这种需要极高瞬态灵敏度的组件，进行中值滤波锐化包络
+        if component_name == 'snare_perc':
+            onset_env = librosa.util.normalize(onset_env)
+        
         if beat_times is None:
-            # 使用更灵敏的节拍追踪
             tempo, beats = librosa.beat.beat_track(y=y_component, sr=self.sr, tightness=100)
             beat_times = librosa.frames_to_time(beats, sr=self.sr)
         
         if len(beat_times) < 2: return None
         avg_beat_dur = np.mean(np.diff(beat_times))
 
-        # 2. 动态探测最佳循环长度
-        possible_mults = [4, 8, 12, 16, 32]
+        # 2. 动态探测周期
+        # 增加 16/32 拍探测，确保捕获 Snare 的长变奏
+        possible_mults = [4, 8, 12, 16, 24, 32]
         best_p_frames = int(librosa.time_to_frames(avg_beat_dur * 8, sr=self.sr))
         max_ac_score = -1
 
@@ -62,68 +63,89 @@ class DrumLoopExtractor:
             ac_segment = librosa.autocorrelate(onset_env, max_size=p_test + 1)
             score = ac_segment[p_test]
             
-            # 权重补偿：针对底鼓轨道，给予 16 拍及其倍数更高权重
-            if component_name == 'kick' and mult >= 16:
-                score *= 1.3 
-                
-            if score > max_ac_score:
-                max_ac_score = score
+            # 权重补偿：针对 Kick/Snare/Cymbals 赋予长周期 (16拍以上) 显著权重，以保留变奏细节
+            bias = 1.4 if component_name in ['kick', 'snare_perc', 'cymbals'] and mult >= 16 else 1.0
+            if score * bias > max_ac_score:
+                max_ac_score = score * bias
                 best_p_frames = p_test
 
-        # 3. 相位自校准：锁定重拍（绿色框起始点）
+        # 3. 相位自校准：锁定重拍起始点 (Downbeat Priority)
         best_start_f = 0
         max_phase_weight = -1
         
-        # 遍历音频前段的节拍点，寻找“爆发力”与“结构一致性”的最佳平衡点
         search_limit = min(32, len(beat_times))
         for i in range(search_limit):
             start_f = librosa.time_to_frames(beat_times[i], sr=self.sr)
             if start_f + best_p_frames * 2 > len(onset_env): break
             
-            # 评分因子：起始点的瞬态能量爆发
             energy_hit = np.max(onset_env[start_f : start_f + 5])
             
-            # 评分因子：跨周期的自相关匹配度
             seg1 = onset_env[start_f : start_f + best_p_frames]
             seg2 = onset_env[start_f + best_p_frames : start_f + 2 * best_p_frames]
             corr = np.corrcoef(seg1, seg2)[0,1] if len(seg1) == len(seg2) else 0
             
             total_weight = (energy_hit * 0.4) + (corr * 0.6)
-            
             if total_weight > max_phase_weight:
                 max_phase_weight = total_weight
                 best_start_f = start_f
 
-        # 4. 物理起点对准：通过能量梯度回溯锁定波形起跳
-        final_start_time = self._refine_start_with_gradient(y_component, best_start_f)
-        actual_duration = librosa.frames_to_time(best_p_frames, sr=self.sr)
+        # 4. 物理起点与终点精准对准 (解决平滑度问题)
+        start_time, end_time = self._refine_loop_boundaries(y_component, best_start_f, best_p_frames, component_name)
 
         return {
-            "start": float(final_start_time),
-            "end": float(final_start_time + actual_duration),
-            "duration": float(actual_duration),
+            "start": float(start_time),
+            "end": float(end_time),
+            "duration": float(end_time - start_time),
             "confidence": float(max_phase_weight)
         }
 
-    def _refine_start_with_gradient(self, y, start_f):
-        """精准回溯底鼓起跳瞬间，消除静音偏差"""
-        start_sample = int(librosa.frames_to_samples(start_f))
-        # 向左回溯 150ms 捕捉物理爆发
-        lookback = int(0.15 * self.sr)
-        search_zone = y[max(0, start_sample - lookback) : start_sample + int(0.05 * self.sr)]
+    def _refine_loop_boundaries(self, y, start_f, p_frames, name):
+        """
+        通过斜率匹配过零点锁定起始和结束位置，确保循环无缝衔接
+        """
+        start_sample_target = int(librosa.frames_to_samples(start_f))
+        end_sample_target = start_sample_target + int(librosa.frames_to_samples(p_frames))
         
-        if len(search_zone) > 0:
-            abs_diff = np.abs(np.diff(np.abs(search_zone)))
-            gradient_peak = np.argmax(abs_diff)
-            pre_peak = search_zone[:gradient_peak]
-            zero_crossings = np.where(np.diff(np.sign(pre_peak)))[0]
+        # 定义搜索窗口 (50ms)
+        win = int(0.05 * self.sr)
+        
+        def find_best_zero_cross(center_sample, preferred_slope=None):
+            s_idx = max(0, center_sample - win)
+            e_idx = min(len(y), center_sample + win)
+            region = y[s_idx:e_idx]
             
-            if len(zero_crossings) > 0:
-                refined_sample = max(0, start_sample - lookback + zero_crossings[-1])
-            else:
-                refined_sample = max(0, start_sample - lookback + gradient_peak - 5)
-            return refined_sample / self.sr
-        return librosa.frames_to_time(start_f, sr=self.sr)
+            # 找到所有过零点
+            zero_crossings = np.where(np.diff(np.sign(region)))[0]
+            if len(zero_crossings) == 0:
+                return center_sample, 1
+            
+            # 评估每个过零点：距离中心近且斜率一致
+            best_zc = zero_crossings[0]
+            min_dist = float('inf')
+            final_slope = 1
+            
+            for zc in zero_crossings:
+                dist = abs(zc - win)
+                slope = np.sign(y[s_idx + zc + 1] - y[s_idx + zc])
+                
+                # 如果指定了首选斜率，则强制匹配
+                if preferred_slope is not None and slope != preferred_slope:
+                    dist += win * 2 # 增加惩罚项
+                
+                if dist < min_dist:
+                    min_dist = dist
+                    best_zc = zc
+                    final_slope = slope
+                    
+            return s_idx + best_zc, final_slope
+
+        # 1. 确定起始点及其波形斜率
+        refined_start, start_slope = find_best_zero_cross(start_sample_target)
+        
+        # 2. 确定结束点，并强制其斜率与起始点一致，实现平滑衔接
+        refined_end, _ = find_best_zero_cross(end_sample_target, preferred_slope=start_slope)
+        
+        return refined_start / self.sr, refined_end / self.sr
 
     def process(self, y_drums, beat_times=None):
         """主处理接口"""
@@ -132,12 +154,13 @@ class DrumLoopExtractor:
         duration = len(y_drums) / self.sr
         
         for name, y_comp in components.items():
-            # 动态检测信号活性，防止处理纯静音区域
             rms_val = np.sqrt(np.mean(y_comp**2))
-            if rms_val < 0.001: # 极低门限确保捕捉微弱信号
+            # Cymbals 的弱音尾部需要极低门限以防被截断
+            thresh = 0.0003 if name == 'cymbals' else 0.001
+            if rms_val < thresh:
                 results[name] = {"loop": None, "audio": y_comp}
                 continue
                 
-            loop_info = self.find_minimum_loop(y_comp, duration, component_name=name, beat_times=beat_times)
+            loop_info = self.find_minimum_loop(y_comp, duration, name, beat_times)
             results[name] = {"loop": loop_info, "audio": y_comp}
         return results
