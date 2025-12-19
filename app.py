@@ -16,39 +16,27 @@ import matplotlib.ticker as ticker
 from division import AudioRemixer
 from drum_processor import DrumLoopExtractor
 
-# --- Analysis Helper Functions ---
+# --- 1. Analysis Helper Functions ---
 def analyze_rhythm_structure(events, duration):
-    """
-    Generate statistical insights from rhythm data
-    """
+    """生成统计洞察数据"""
     stats = {}
     for instr, ev_list in events.items():
         if not ev_list:
-            stats[instr] = {
-                "count": 0, 
-                "density_ppm": 0, 
-                "avg_dur_ms": 0, 
-                "active_ratio_pct": 0,
-                "avg_gap_ms": 0
-            }
+            stats[instr] = {"count": 0, "density_ppm": 0, "avg_dur_ms": 0, "active_ratio_pct": 0, "avg_gap_ms": 0}
             continue
-            
         count = len(ev_list)
         total_active_time = sum(e['duration'] for e in ev_list)
         avg_dur = total_active_time / count if count > 0 else 0
-        density = count / duration * 60  # events per minute
+        density = count / duration * 60  
         active_ratio = total_active_time / duration * 100
-        
-        # Calculate intervals (silence between notes)
         intervals = []
         for i in range(len(ev_list) - 1):
             gap = ev_list[i+1]['start'] - (ev_list[i]['start'] + ev_list[i]['duration'])
             if gap > 0: intervals.append(gap)
         avg_interval = np.mean(intervals) if intervals else 0
-        
         stats[instr] = {
             "count": count,
-            "density_ppm": round(density, 1), # parts per minute
+            "density_ppm": round(density, 1),
             "avg_dur_ms": round(avg_dur * 1000, 1),
             "active_ratio_pct": round(active_ratio, 1),
             "avg_gap_ms": round(avg_interval * 1000, 1)
@@ -56,90 +44,22 @@ def analyze_rhythm_structure(events, duration):
     return stats
 
 def generate_text_report(stats):
-    """
-    Generate a natural language summary of the analysis - Dynamic for any instruments
-    """
+    """生成自然语言摘要总结报告"""
     report = []
-    
-    if not stats:
-        return "No analysis data available."
-
-    # 1. Dominant Instrument
+    if not stats: return "No analysis data available."
     densities = {k: v['density_ppm'] for k, v in stats.items()}
     if densities:
         dominant = max(densities, key=densities.get)
-        report.append(f"**Dominant Element:** The **{dominant.capitalize()}** leads the texture with the highest rhythmic density ({densities[dominant]} events/min).")
-    
-    # 2. Instrument Roles (Dynamic)
+        report.append(f"**Dominant Element:** The **{dominant.capitalize()}** leads the texture ({densities[dominant]} events/min).")
     sorted_instrs = sorted(stats.items(), key=lambda x: x[1]['active_ratio_pct'], reverse=True)
-    
     for instr, data in sorted_instrs:
-        name = instr.capitalize()
-        active = data['active_ratio_pct']
-        avg_dur = data['avg_dur_ms']
-        
-        desc = ""
-        if active > 50:
-            desc = f"Main sustained layer ({active}% active)"
-        elif active > 20:
-            desc = f"Core rhythmic element ({active}% active)"
-        else:
-            desc = f"Sparse accents or fills ({active}% active)"
-            
-        if avg_dur > 500:
-            desc += " with long, sustained notes."
-        elif avg_dur < 100:
-            desc += " with short, percussive hits."
-        else:
-            desc += "."
-            
-        report.append(f"- **{name}:** {desc}")
-        
-    # 3. Complexity
-    total_events = sum(s['count'] for s in stats.values())
-    if total_events > 300:
-        report.append("**Overall Texture:** High complexity with frequent interplay between layers.")
-    elif total_events < 100:
-        report.append("**Overall Texture:** Minimalist and spacious.")
-    else:
-        report.append("**Overall Texture:** Balanced rhythmic structure.")
-        
+        desc = f"{instr.capitalize()}: {data['active_ratio_pct']}% active, {data['avg_dur_ms']}ms avg duration."
+        report.append(f"- {desc}")
     return "\n\n".join(report)
 
-st.set_page_config(layout="wide", page_title="LoopHunter - Final UI")
-
-st.markdown("""
-<style>
-    .main { background-color: #0d1117; }
-    .stButton>button { width: 100%; border-radius: 6px; font-weight: 600; }
-    .audio-player-box {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 10px;
-    }
-    div[data-testid="stNumberInput"] input { text-align: center; }
-    [data-testid="stFileUploader"] > div > div { display: flex; flex-direction: column-reverse; }
-    [data-testid="stFileUploader"] section[data-testid="stFileUploadDropzone"] { margin-top: 10px; }
-    .stDownloadButton button { height: 3rem; padding-top: 0.4rem; padding-bottom: 0.4rem; }
-    h1, h2, h3, p, label { color: #c9d1d9; }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🎛️ Audio Loop & Remix Studio")
-
-if 'remixer' not in st.session_state: st.session_state.remixer = None
-if 'stem_events' not in st.session_state: st.session_state.stem_events = None
-if 'stem_audio' not in st.session_state: st.session_state.stem_audio = None  # [New] Store audio for stems
-if 'timeline' not in st.session_state: st.session_state.timeline = None
-if 'final_audio' not in st.session_state: st.session_state.final_audio = None
-if 'final_dur' not in st.session_state: st.session_state.final_dur = 0.0
-if 'loop_page' not in st.session_state: st.session_state.loop_page = 0
-if 'analysis_report' not in st.session_state: st.session_state.analysis_report = None
-if 'drum_loops' not in st.session_state: st.session_state.drum_loops = None
-
+# --- 2. Plotting Helpers ---
 def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
+    """带高亮区域的小型波形预览"""
     fig, ax = plt.subplots(figsize=(10, 1.2)) 
     fig.patch.set_facecolor('#161b22')
     ax.set_facecolor('#161b22')
@@ -151,543 +71,217 @@ def plot_mini_waveform_with_highlight(y, sr, loop_start, loop_end):
     e_idx = int(loop_end * sr / step)
     if e_idx > s_idx:
         times = np.arange(len(y_subs)) / sr_subs
-        loop_times = times[s_idx:e_idx]
-        loop_chunk = y_subs[s_idx:e_idx]
-        ax.plot(loop_times, loop_chunk, color='#3b82f6', linewidth=0.8, alpha=0.9) 
-        rect = patches.Rectangle((loop_start, -1), loop_end - loop_start, 2, facecolor='#1f6feb', alpha=0.15, edgecolor=None)
-        ax.add_patch(rect)
+        ax.plot(times[s_idx:e_idx], y_subs[s_idx:e_idx], color='#3b82f6', linewidth=0.8, alpha=0.9) 
+        ax.add_patch(patches.Rectangle((loop_start, -1), loop_end - loop_start, 2, facecolor='#1f6feb', alpha=0.15))
     ax.set_yticks([]); ax.set_xticks([])
     ax.set_xlim(0, len(y_subs)/sr_subs)
     for spine in ax.spines.values(): spine.set_visible(False)
     plt.tight_layout(pad=0)
     return fig
 
-def plot_combined_waveforms(full_y, stems_audio, sr):
-    fig = go.Figure()
-    step = max(1, len(full_y) // 5000) # Target ~5k points for performance
-    
-    # Time axis
-    time_axis = np.arange(0, len(full_y), step) / sr
-    
-    # 1. Full Mix (Background)
-    fig.add_trace(go.Scatter(
-        x=time_axis, y=full_y[::step],
-        name="Full Mix",
-        line=dict(color='gray', width=1),
-        opacity=0.5
-    ))
-    
-    # 2. Stems
-    colors = px.colors.qualitative.Plotly
-    for i, (name, y) in enumerate(stems_audio.items()):
-        if len(y) == 0 or np.max(np.abs(y)) < 0.01: continue
-        # Downsample stem to match full mix length logic
-        y_down = y[::step]
-        # Ensure lengths match
-        min_len = min(len(time_axis), len(y_down))
-        
-        fig.add_trace(go.Scatter(
-            x=time_axis[:min_len], y=y_down[:min_len],
-            name=name.capitalize(),
-            line=dict(color=colors[i % len(colors)], width=1),
-            opacity=0.8,
-            visible='legendonly' # Hide by default to keep it clean
-        ))
-        
-    fig.update_layout(
-        title="Combined Waveform View (Click legend to show/hide tracks)",
-        xaxis_title="Time (s)",
-        yaxis_title="Amplitude",
-        template="plotly_dark",
-        height=400,
-        margin=dict(l=20, r=20, t=40, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    return fig
-
 def plot_single_stem_waveform(y, sr, color):
+    """绘制分轨交互式 Plotly 波形图"""
     step = max(1, len(y) // 3000)
     y_down = y[::step]
     x_down = np.arange(0, len(y), step) / sr
-    
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x_down, y=y_down,
-        mode='lines',
-        line=dict(color=color, width=1),
-        fill='tozeroy'
-    ))
-    fig.update_layout(
-        template="plotly_dark",
-        height=120,
-        margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False,
-        xaxis=dict(visible=False, fixedrange=True),
-        yaxis=dict(visible=False, fixedrange=True),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)'
-    )
-    return fig
-
-def plot_instrument_timeline_interactive(events, total_duration):
-    """
-    使用 Plotly 绘制交互式乐器节奏图 (Gantt-like chart) - 支持任意乐器键名
-    """
-    # 1. 转换数据为 DataFrame
-    data = []
-    
-    # 动态生成颜色映射
-    # 使用 Plotly 默认色板或自定义色板循环
-    color_palette = px.colors.qualitative.Pastel
-    unique_instruments = sorted(list(events.keys()))
-    colors_map = {instr.capitalize(): color_palette[i % len(color_palette)] for i, instr in enumerate(unique_instruments)}
-    
-    # 覆盖默认颜色以保持一致性 (如果存在)
-    default_colors = {'Melody': '#d2a8ff', 'Bass': '#79c0ff', 'Drums': '#ff7b72'}
-    for k, v in default_colors.items():
-        if k in colors_map:
-            colors_map[k] = v
-            
-    for instr, ev_list in events.items():
-        for ev in ev_list:
-            data.append(dict(
-                Instrument=instr.capitalize(),
-                Start=ev['start'],
-                End=ev['start'] + ev['duration'],
-                Duration=ev['duration']
-            ))
-            
-    if not data:
-        return None
-        
-    df = pd.DataFrame(data)
-    
-    # 2. 绘制 Gantt 图 (使用 px.bar)
-    fig = px.bar(
-        df, 
-        base="Start", 
-        x="Duration", 
-        y="Instrument", 
-        color="Instrument",
-        orientation='h',
-        color_discrete_map=colors_map,
-        hover_data={"Start": ":.2f", "End": ":.2f", "Duration": ":.2f", "Instrument": False},
-        height=300
-    )
-    
-    # 3. 布局美化
-    fig.update_layout(
-        xaxis=dict(
-            title="Time (s)",
-            showgrid=True,
-            gridcolor='#30363d',
-            zerolinecolor='#30363d',
-            range=[0, total_duration]
-        ),
-        yaxis=dict(
-            title="",
-            categoryorder='total ascending' # 按活跃度排序
-        ),
-        plot_bgcolor='#0d1117',
-        paper_bgcolor='#0d1117',
-        font=dict(color='#c9d1d9'),
-        margin=dict(l=10, r=10, t=30, b=30),
-        showlegend=False,
-        hovermode='closest'
-    )
-    
+    fig.add_trace(go.Scatter(x=x_down, y=y_down, mode='lines', line=dict(color=color, width=1), fill='tozeroy'))
+    fig.update_layout(template="plotly_dark", height=120, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+                      xaxis=dict(visible=False, fixedrange=True), yaxis=dict(visible=False, fixedrange=True),
+                      paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     return fig
 
 def plot_remix_waveform(remix_y, sr, timeline, total_remix_dur):
+    """绘制 Remix 渲染结果波形图"""
     fig, ax = plt.subplots(figsize=(12, 3))
-    fig.patch.set_facecolor('#0d1117')
-    ax.set_facecolor('#161b22')
-    ax.set_xlim(0, total_remix_dur)
-    ax.set_xlabel("Time (s)", color='#8b949e')
-    ax.tick_params(axis='x', colors='#8b949e')
-    ax.set_yticks([])
-    
+    fig.patch.set_facecolor('#0d1117'); ax.set_facecolor('#161b22')
+    ax.set_xlim(0, total_remix_dur); ax.set_xlabel("Time (s)", color='#8b949e')
+    ax.tick_params(axis='x', colors='#8b949e'); ax.set_yticks([])
     step = 100
-    
-    for i, seg in enumerate(timeline):
-        start_time = seg['remix_start']
-        duration = seg['duration']
-        end_time = start_time + duration
-        
-        label = seg['type']
-        color = '#238636' # Default Green (Linear)
-        if label == 'Loop Extension': color = '#1f6feb' # Blue
-        if seg.get('is_jump'): color = '#d2a8ff' # Purple (Tail/Jump)
-        
-        start_sample = int(start_time * sr)
-        end_sample = int(end_time * sr)
-        
-        if end_sample > len(remix_y): end_sample = len(remix_y)
-        if start_sample >= end_sample: continue
-        
-        segment_y = remix_y[start_sample:end_sample:step]
-        segment_times = np.linspace(start_time, end_time, num=len(segment_y))
-        
-        ax.plot(segment_times, segment_y, color=color, linewidth=0.8, alpha=0.9)
-        ax.axvline(x=start_time, color='white', linestyle=':', linewidth=0.8, alpha=0.6)
-        ax.text(start_time, 1.05, f"{start_time:.1f}s", color='white', rotation=0, ha='left', va='bottom', fontsize=8)
-        
-        if seg.get('xfade', 0) > 0 or seg.get('is_jump'):
-             ax.scatter([start_time], [0], color='white', s=15, zorder=10)
-
-        if duration > 2.0:
-            lbl_text = "Loop" if "Loop" in label else label
-            mid_point = start_time + duration / 2
-            ax.text(mid_point, -0.8, lbl_text, color='white', ha='center', va='center', fontsize=8, alpha=0.7)
-
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.spines['bottom'].set_color('#30363d')
+    for seg in timeline:
+        s_time, dur = seg['remix_start'], seg['duration']
+        color = '#1f6feb' if seg['type'] == 'Loop Extension' else ('#d2a8ff' if seg.get('is_jump') else '#238636')
+        s_samp, e_samp = int(s_time * sr), int((s_time + dur) * sr)
+        if e_samp > len(remix_y): e_samp = len(remix_y)
+        if s_samp >= e_samp: continue
+        seg_y = remix_y[s_samp:e_samp:step]
+        ax.plot(np.linspace(s_time, s_time + dur, len(seg_y)), seg_y, color=color, linewidth=0.8, alpha=0.9)
+        ax.axvline(x=s_time, color='white', linestyle=':', linewidth=0.8, alpha=0.6)
+    for spine in ax.spines.values(): spine.set_visible(False)
     plt.tight_layout()
     return fig
 
-with st.sidebar:
-    st.header("1. Upload")
-    uploaded_file = st.file_uploader("Audio", type=["mp3", "wav"])
-    
-    if uploaded_file:
-        st.write("")
-        if st.button("🚀 Analyze Audio", type="primary", use_container_width=True):
-            with st.spinner("Scanning structure & loops..."):
-                suffix = ".mp3" if uploaded_file.name.endswith(".mp3") else ".wav"
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tfile:
-                    tfile.write(uploaded_file.read())
-                    tpath = tfile.name
-                remixer = AudioRemixer(tpath)
-                remixer.analyze()
-                st.session_state.remixer = remixer
-                # [Update] Unpack events and audio
-                events, stems_audio = remixer.analyze_stems()
-                st.session_state.stem_events = events
-                st.session_state.stem_audio = stems_audio
-                
-                st.session_state.timeline = None
-                st.session_state.final_audio = None
-                st.session_state.loop_page = 0 
-                st.session_state.drum_loops = None
-                json_data, text_data = remixer.export_analysis_data(uploaded_file.name)
-                st.session_state.analysis_report = {"json": json_data, "text": text_data}
-                os.remove(tpath)
-                count = len(remixer.loops)
-                if count > 0: st.success(f"Found {count} loops!")
-                else: st.warning("No loops found.")
+# --- 3. App Setup ---
+st.set_page_config(layout="wide", page_title="LoopHunter - Audio Loop & Remix Studio")
 
-    st.divider()
-    
-    if st.session_state.remixer and st.session_state.analysis_report:
-        st.header("2. Analysis Data")
-        json_str = json.dumps(st.session_state.analysis_report["json"], indent=4)
-        text_str = st.session_state.analysis_report["text"]
-        c1, c2 = st.columns(2)
-        with c1:
-            st.download_button("JSON File", data=json_str, file_name="analysis_data.json", mime="application/json", use_container_width=True)
-        with c2:
-            st.download_button("User Report", data=text_str, file_name="analysis_report.txt", mime="text/plain", use_container_width=True)
-        st.divider()
+st.title("🎛️ Audio Loop & Remix Studio")
+st.caption("Advanced tool for scanning loops, analyzing instrument rhythm, and generating custom-length remixes.")
+
+st.markdown("""
+<style>
+    .main { background-color: #0d1117; }
+    .stButton>button { width: 100%; border-radius: 6px; font-weight: 600; }
+    .audio-player-box { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
+    h1, h2, h3, p, label { color: #c9d1d9; }
+</style>
+""", unsafe_allow_html=True)
+
+if 'remixer' not in st.session_state: st.session_state.remixer = None
+if 'stem_events' not in st.session_state: st.session_state.stem_events = None
+if 'stem_audio' not in st.session_state: st.session_state.stem_audio = None
+if 'timeline' not in st.session_state: st.session_state.timeline = None
+if 'final_audio' not in st.session_state: st.session_state.final_audio = None
+if 'drum_loops' not in st.session_state: st.session_state.drum_loops = None
+
+# --- 4. Sidebar Controller ---
+with st.sidebar:
+    st.header("1. Upload Audio")
+    uploaded_file = st.file_uploader("Choose music file", type=["mp3", "wav"])
+    if uploaded_file and st.button("🚀 Run Full Analysis", type="primary"):
+        with st.spinner("Analyzing rhythm & stems..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tfile:
+                tfile.write(uploaded_file.read())
+                tpath = tfile.name
+            remixer = AudioRemixer(tpath); remixer.analyze()
+            st.session_state.remixer = remixer
+            events, stems_audio = remixer.analyze_stems()
+            st.session_state.stem_events, st.session_state.stem_audio = events, stems_audio
+            st.session_state.timeline = None; st.session_state.final_audio = None; st.session_state.drum_loops = None
+            os.remove(tpath); st.success("Analysis Complete!")
 
     if st.session_state.remixer:
-        st.header("3. Remix Settings")
-        duration = st.session_state.remixer.duration
-        target_dur = st.slider("Target Duration (s)", min_value=10, max_value=int(duration*3), value=int(duration), step=1)
-        st.write("")
-        if st.button("✨ Generate Remix", type="primary", use_container_width=True):
+        st.divider(); st.header("2. Remix Logic")
+        dur = st.session_state.remixer.duration
+        target_dur = st.slider("Target Duration (s)", 10, int(dur*3), int(dur))
+        if st.button("✨ Generate Remix", type="primary"):
             tl, actual_dur = st.session_state.remixer.plan_multi_loop_remix(target_dur)
-            st.session_state.timeline = tl
-            with st.spinner("Rendering Remix..."):
+            st.session_state.timeline, st.session_state.final_dur = tl, actual_dur
+            with st.spinner("Rendering..."):
                 audio = st.session_state.remixer.render_remix(tl)
-                if len(audio) > 0:
-                    mx = np.max(np.abs(audio))
-                    if mx > 0: audio = audio / mx * 0.95
+                if len(audio) > 0: audio = (audio / np.max(np.abs(audio)) * 0.95) if np.max(np.abs(audio)) > 0 else audio
                 st.session_state.final_audio = audio
-                st.session_state.final_dur = actual_dur
 
+# --- 5. Main Dashboard ---
 if st.session_state.remixer:
     remixer = st.session_state.remixer
+    
+    # Section 2: Global Loops
     if remixer.loops:
-        total_loops = len(remixer.loops)
-        items_per_page = 5
-        current_page = st.session_state.loop_page
-        start_idx = current_page * items_per_page
-        end_idx = min(start_idx + items_per_page, total_loops)
-        total_pages = (total_loops + items_per_page - 1) // items_per_page
-        st.subheader(f"2. Detected Loops ({start_idx+1}-{end_idx} of {total_loops})")
-        st.caption("Click play to hear a seamless loop preview (repeated 4x).")
-        for i in range(start_idx, end_idx):
-            loop = remixer.loops[i]
+        st.subheader("2. Detected Global Loops")
+        for i, loop in enumerate(remixer.loops[:5]):
             with st.container():
-                c1, c2, c3 = st.columns([1, 6, 2], gap="small")
-                with c1:
-                    st.write(""); st.write("") 
-                    if st.button(f"▶", key=f"play_{i}"):
-                        loop_audio = remixer.generate_loop_preview(loop, repetitions=4)
-                        buf = io.BytesIO()
-                        sf.write(buf, loop_audio, remixer.sr, format='WAV')
-                        st.session_state[f'audio_{i}'] = buf.getvalue()
+                c1, c2, c3 = st.columns([1, 6, 2])
+                with c1: 
+                    if st.button(f"▶", key=f"lp_{i}"):
+                        st.session_state[f'aud_{i}'] = remixer.generate_loop_preview(loop, 4)
                 with c2:
-                    fig = plot_mini_waveform_with_highlight(remixer.y, remixer.sr, loop['start'], loop['end'])
-                    st.pyplot(fig)
-                    if f'audio_{i}' in st.session_state:
-                        st.audio(st.session_state[f'audio_{i}'], format='audio/wav')
-                with c3:
-                    st.write("")
-                    st.markdown(f"**{loop['duration']:.1f}s**")
-                    st.caption(f"{loop['start']:.1f}s - {loop['end']:.1f}s")
-                st.markdown("<hr style='margin: 5px 0; opacity: 0.2;'>", unsafe_allow_html=True)
-        col_prev, col_input, col_next = st.columns([1, 2, 1])
-        with col_prev:
-            if st.button("◀ Previous", disabled=(current_page == 0), use_container_width=True):
-                st.session_state.loop_page -= 1
-                st.rerun()
-        with col_input:
-            def update_page_number():
-                new_page = st.session_state.page_input - 1
-                if 0 <= new_page < total_pages: st.session_state.loop_page = new_page
-            st.number_input("Jump to Page", min_value=1, max_value=total_pages, value=current_page + 1, step=1, key="page_input", on_change=update_page_number, label_visibility="collapsed")
-            st.markdown(f"<div style='text-align: center; color: #666; font-size: 0.8em;'>of {total_pages} pages</div>", unsafe_allow_html=True)
-        with col_next:
-            if st.button("Next ▶", disabled=(end_idx == total_loops), use_container_width=True):
-                st.session_state.loop_page += 1
-                st.rerun()
-    else:
-        st.info("No loops detected.")
+                    st.pyplot(plot_mini_waveform_with_highlight(remixer.y, remixer.sr, loop['start'], loop['end']))
+                    if f'aud_{i}' in st.session_state:
+                        buf = io.BytesIO(); sf.write(buf, st.session_state[f'aud_{i}'], remixer.sr, format='WAV')
+                        st.audio(buf.getvalue(), format='audio/wav')
+                with c3: st.markdown(f"**{loop['duration']:.1f}s**"); st.caption(f"Score: {loop['score']:.2f}")
 
+    # Section 3: Rhythm Breakdown & Stem Players (融合 Drum Decomposition)
     if st.session_state.stem_events:
-        st.divider()
-        st.subheader("3. Instrument Rhythm Breakdown")
-        st.caption("Interactive visualization: Zoom, Pan, and Hover to see details.")
+        st.divider(); st.subheader("3. Instrument Rhythm Breakdown & Stem Players")
         
-        # Plotly Chart
-        fig_inst = plot_instrument_timeline_interactive(st.session_state.stem_events, remixer.duration)
-        if fig_inst:
-            st.plotly_chart(fig_inst, use_container_width=True)
-            
-        # Download Data
-        st.write("#### Download Rhythm Data")
-        c1, c2 = st.columns(2)
-        
-        # Prepare JSON
-        rhythm_json = json.dumps(st.session_state.stem_events, indent=4)
-        
-        # Prepare Excel/CSV friendly format
-        flat_data = []
-        for instr, ev_list in st.session_state.stem_events.items():
-            for ev in ev_list:
-                flat_data.append({
-                    "Instrument": instr,
-                    "Start (s)": round(ev['start'], 4),
-                    "Duration (s)": round(ev['duration'], 4),
-                    "End (s)": round(ev['start'] + ev['duration'], 4),
-                    "Remark": ev.get('remark', '')  # [New] Loop info
-                })
-        df_rhythm = pd.DataFrame(flat_data)
-        csv_data = df_rhythm.to_csv(index=False).encode('utf-8')
-        
-        with c1:
-            st.download_button(
-                label="📥 Download JSON",
-                data=rhythm_json,
-                file_name="instrument_rhythm.json",
-                mime="application/json",
-                use_container_width=True
-            )
-        with c2:
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv_data,
-                file_name="instrument_rhythm.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-            
-        # Analysis Report
-        st.write("#### 📊 Structural Analysis Report")
-        stats = analyze_rhythm_structure(st.session_state.stem_events, remixer.duration)
-        
-        # --- NEW: Combined Waveform ---
-        if st.session_state.stem_audio:
-            st.subheader("Waveform Overview")
-            fig_combined = plot_combined_waveforms(remixer.y, st.session_state.stem_audio, remixer.sr)
-            st.plotly_chart(fig_combined, use_container_width=True)
-            
-            st.write("#### Individual Stems Breakdown")
-            # Generate Colors
-            colors_list = px.colors.qualitative.Plotly
-            
-            for i, (instr, data) in enumerate(stats.items()):
-                # Create a container for each stem
-                with st.container():
-                    col_info, col_wave = st.columns([1, 5])
-                    
-                    # Info Column
-                    with col_info:
-                        st.markdown(f"**{instr.capitalize()}**")
-                        st.caption(f"Density: {data['density_ppm']} ppm")
-                        st.caption(f"Active: {data['active_ratio_pct']}%")
-                        
-                    # Waveform & Player Column
-                    with col_wave:
-                        if instr in st.session_state.stem_audio:
-                            color = colors_list[i % len(colors_list)]
-                            fig_stem = plot_single_stem_waveform(st.session_state.stem_audio[instr], remixer.sr, color)
-                            st.plotly_chart(fig_stem, use_container_width=True, config={'displayModeBar': False})
-                            
-                            # Player - Now in the wider column for better seek bar
-                            stem_y = st.session_state.stem_audio[instr]
-                            if np.any(stem_y):
-                                max_val = np.max(np.abs(stem_y))
-                                if max_val > 0: stem_y = stem_y / max_val * 0.95
-                                buf = io.BytesIO()
-                                sf.write(buf, stem_y, remixer.sr, format='WAV')
-                                st.audio(buf.getvalue(), format='audio/wav')
-                            
-                            # [New] Sample Event Audition
-                            ev_list = st.session_state.stem_events.get(instr, [])
-                            if ev_list:
-                                with st.expander("🔍 Audition 5 Consecutive Events"):
-                                    # Select 5 consecutive samples
-                                    num_events = len(ev_list)
-                                    if num_events <= 5:
-                                        indices = range(num_events)
-                                    else:
-                                        # Use session state to keep samples stable
-                                        sample_key = f"sample_start_{instr}"
-                                        # Reset if missing or event count changed (new analysis)
-                                        if sample_key not in st.session_state or st.session_state[sample_key]['total'] != num_events:
-                                            st.session_state[sample_key] = {
-                                                'idx': np.random.randint(0, num_events - 4),
-                                                'total': num_events
-                                            }
-                                        
-                                        # Shuffle button
-                                        if st.button("🎲 Randomize Selection", key=f"shuffle_{instr}", help="Pick a new random starting point"):
-                                            st.session_state[sample_key]['idx'] = np.random.randint(0, num_events - 4)
-                                            st.rerun()
-                                            
-                                        start_idx = st.session_state[sample_key]['idx']
-                                        indices = range(start_idx, start_idx + 5)
-                                    
-                                    for idx in indices:
-                                        ev = ev_list[idx]
-                                        start = ev['start']
-                                        dur = ev['duration']
-                                        
-                                        # Padding for better listening (0.05s)
-                                        pad = 0.05
-                                        s_idx = max(0, int((start - pad) * remixer.sr))
-                                        e_idx = min(len(st.session_state.stem_audio[instr]), int((start + dur + pad) * remixer.sr))
-                                        
-                                        clip = st.session_state.stem_audio[instr][s_idx:e_idx]
-                                        
-                                        # Normalize clip
-                                        if len(clip) > 0:
-                                            mx = np.max(np.abs(clip))
-                                            if mx > 0: clip = clip / mx * 0.9
-                                            
-                                            buf_clip = io.BytesIO()
-                                            sf.write(buf_clip, clip, remixer.sr, format='WAV')
-                                            
-                                            c1, c2 = st.columns([1, 4])
-                                            c1.caption(f"#{idx+1} @ {start:.2f}s\n(Len: {dur:.2f}s)")
-                                            c2.audio(buf_clip.getvalue(), format='audio/wav')
-                    
-                    st.divider()
-
-        # --- NEW: Drum Kit Decomposition ---
-        if 'drums' in st.session_state.stem_audio:
-            st.divider()
-            st.subheader("🥁 Drum Kit Decomposition & Loop Extraction")
-            
-            if st.button("Extract Drum Loops (Kick/Snare/Cymbals)", type="primary"):
-                with st.spinner("Separating drum components and finding loops..."):
+        # 鼓组分解触发按钮放在此处
+        if st.session_state.stem_audio and 'drums' in st.session_state.stem_audio:
+            if st.button("🥁 Analyze Drum Components (Kick/Snare/Cymbals)", type="primary"):
+                with st.spinner("Decomposing Drum Kit..."):
                     extractor = DrumLoopExtractor(sr=remixer.sr)
-                    # Pass beat_times to align loops to grid
-                    drum_loops = extractor.process(st.session_state.stem_audio['drums'], beat_times=remixer.beat_times)
-                    st.session_state.drum_loops = drum_loops
-            
-            if 'drum_loops' in st.session_state and st.session_state.drum_loops:
-                for name, data in st.session_state.drum_loops.items():
-                    with st.expander(f"{name.capitalize()} Analysis", expanded=True):
-                        col_a, col_b = st.columns([1, 3])
-                        
-                        # Audio Player for the component stem
-                        audio_comp = data['audio']
-                        # Normalize for playback
-                        if len(audio_comp) > 0:
-                            mx = np.max(np.abs(audio_comp))
-                            if mx > 0: audio_comp_norm = audio_comp / mx * 0.95
-                            else: audio_comp_norm = audio_comp
-                            
-                            buf = io.BytesIO()
-                            sf.write(buf, audio_comp_norm, remixer.sr, format='WAV')
-                            col_a.write("**Full Stem**")
-                            col_a.audio(buf.getvalue(), format='audio/wav')
-                        
-                        # Loop Info
-                        loop = data['loop']
-                        if loop:
-                            col_b.success(f"Minimum Loop Detected: {loop['duration']:.2f}s (Conf: {loop['confidence']:.2f})")
-                            col_b.caption(f"Start: {loop['start']:.2f}s - End: {loop['end']:.2f}s")
-                            
-                            # Extract Loop Audio
-                            s_samp = int(loop['start'] * remixer.sr)
-                            e_samp = int(loop['end'] * remixer.sr)
-                            loop_chunk = data['audio'][s_samp:e_samp]
-                            
-                            # Repeat 4 times for preview
-                            preview_4x = np.tile(loop_chunk, 4)
-                            
-                            # Normalize
-                            if len(preview_4x) > 0:
-                                mx = np.max(np.abs(preview_4x))
-                                if mx > 0: preview_4x = preview_4x / mx * 0.95
-                                
-                                buf_loop_4x = io.BytesIO()
-                                sf.write(buf_loop_4x, preview_4x, remixer.sr, format='WAV')
-                                
-                                buf_loop_1x = io.BytesIO()
-                                # 1x Preview
-                                loop_chunk_norm = loop_chunk
-                                if mx > 0: loop_chunk_norm = loop_chunk / mx * 0.95
-                                sf.write(buf_loop_1x, loop_chunk_norm, remixer.sr, format='WAV')
-                                
-                                c1, c2 = col_b.columns(2)
-                                c1.write("**Loop Preview (1x)**")
-                                c1.audio(buf_loop_1x.getvalue(), format='audio/wav')
-                                
-                                c2.write("**Loop Preview (4x)**")
-                                c2.audio(buf_loop_4x.getvalue(), format='audio/wav')
-                                
-                            # Waveform of loop
-                            fig_loop = plot_mini_waveform_with_highlight(data['audio'], remixer.sr, loop['start'], loop['end'])
-                            col_b.pyplot(fig_loop)
-                        else:
-                            col_b.warning("No clear loop pattern found.")
+                    st.session_state.drum_loops = extractor.process(st.session_state.stem_audio['drums'], beat_times=remixer.beat_times)
         
-        # Text Report
+        stats = analyze_rhythm_structure(st.session_state.stem_events, remixer.duration)
+        colors_list = px.colors.qualitative.Plotly
+        
+        for i, (instr, data) in enumerate(stats.items()):
+            with st.container():
+                col_info, col_wave = st.columns([1, 5])
+                with col_info:
+                    st.markdown(f"**{instr.upper()}**")
+                    st.caption(f"Density: {data['density_ppm']} ppm\nActive: {data['active_ratio_pct']}%")
+                
+                with col_wave:
+                    if instr in st.session_state.stem_audio:
+                        # 交互式 Plotly 波形图
+                        st.plotly_chart(plot_single_stem_waveform(st.session_state.stem_audio[instr], remixer.sr, colors_list[i % len(colors_list)]), 
+                                        use_container_width=True, config={'displayModeBar': False})
+                        
+                        # 分轨音频播放器 (保持长进度条)
+                        stem_y = st.session_state.stem_audio[instr]
+                        if np.any(stem_y):
+                            mx = np.max(np.abs(stem_y))
+                            norm_y = stem_y / mx * 0.95 if mx > 0 else stem_y
+                            buf = io.BytesIO(); sf.write(buf, norm_y, remixer.sr, format='WAV')
+                            st.caption(f"Full Track: {instr.capitalize()}")
+                            st.audio(buf.getvalue())
+                        
+                        # --- 融合区域: 如果是鼓组子组件且已分析，则插入 Loop 预览 ---
+                        if st.session_state.drum_loops and instr in st.session_state.drum_loops:
+                            loop = st.session_state.drum_loops[instr]['loop']
+                            if loop:
+                                with st.expander(f"♾️ Precision Loop Preview ({instr.capitalize()})", expanded=True):
+                                    cl1, cl2 = st.columns([2, 1])
+                                    with cl1:
+                                        st.success(f"Loop Detected: {loop['duration']:.2f}s")
+                                        st.pyplot(plot_mini_waveform_with_highlight(st.session_state.drum_loops[instr]['audio'], remixer.sr, loop['start'], loop['end']))
+                                    with cl2:
+                                        s_samp, e_samp = int(loop['start']*remixer.sr), int(loop['end']*remixer.sr)
+                                        loop_chunk = st.session_state.drum_loops[instr]['audio'][s_samp:e_samp]
+                                        if len(loop_chunk) > 0:
+                                            l_norm = loop_chunk / np.max(np.abs(loop_chunk)) * 0.95
+                                            b1, b4 = io.BytesIO(), io.BytesIO()
+                                            sf.write(b1, l_norm, remixer.sr, format='WAV')
+                                            sf.write(b4, np.tile(l_norm, 4), remixer.sr, format='WAV')
+                                            st.caption("1x Loop"); st.audio(b1.getvalue())
+                                            st.caption("4x Loop Preview"); st.audio(b4.getvalue())
+                        
+                        # 5段随机事件试听功能
+                        ev_list = st.session_state.stem_events.get(instr, [])
+                        if ev_list:
+                            with st.expander(f"🔍 Sample Note Audition ({instr.capitalize()})"):
+                                num_events = len(ev_list)
+                                start_idx = np.random.randint(0, max(1, num_events - 4))
+                                for idx in range(start_idx, min(num_events, start_idx + 5)):
+                                    ev = ev_list[idx]
+                                    s_idx, e_idx = max(0, int((ev['start']-0.05)*remixer.sr)), min(len(stem_y), int((ev['start']+ev['duration']+0.05)*remixer.sr))
+                                    clip = stem_y[s_idx:e_idx]
+                                    if len(clip) > 0:
+                                        buf_c = io.BytesIO(); sf.write(buf_c, clip/np.max(np.abs(clip))*0.9, remixer.sr, format='WAV')
+                                        sc1, sc2 = st.columns([1, 4])
+                                        sc1.caption(f"Event #{idx+1}"); sc2.audio(buf_c.getvalue())
+            st.divider()
+
+        # Section: Export Data (JSON & CSV)
+        st.write("#### 📥 Export Analysis Data")
         st.info(generate_text_report(stats))
+        
+        all_rows = []
+        for instr_type, event_list in st.session_state.stem_events.items():
+            for evt in event_list:
+                all_rows.append({
+                    "Instrument": instr_type,
+                    "Start Time (s)": round(evt['start'], 3),
+                    "Duration (s)": round(evt['duration'], 3),
+                    "End Time (s)": round(evt['start'] + evt['duration'], 3)
+                })
+        df_export = pd.DataFrame(all_rows).sort_values(by="Start Time (s)")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            json_data = json.dumps(st.session_state.stem_events, indent=4)
+            st.download_button(label="Download JSON", data=json_data, file_name="instrument_rhythm.json", mime="application/json", use_container_width=True)
+        with col_dl2:
+            csv_data = df_export.to_csv(index=False).encode('utf-8')
+            st.download_button(label="Download CSV", data=csv_data, file_name="instrument_rhythm.csv", mime="text/csv", use_container_width=True)
 
-    if st.session_state.timeline:
-        st.divider()
-        st.subheader("4. Remix Result")
-        if st.session_state.final_audio is not None:
-            fig_wave = plot_remix_waveform(st.session_state.final_audio, st.session_state.remixer.sr, st.session_state.timeline, st.session_state.final_dur)
-            st.pyplot(fig_wave)
-        else:
-            st.warning("Please generate remix first.")
-        c_a, c_b = st.columns(2)
-        c_a.info(f"Target: {target_dur}s")
-        c_b.success(f"Actual: {st.session_state.final_dur:.1f}s")
-        if st.session_state.final_audio is not None:
-            buf = io.BytesIO()
-            sf.write(buf, st.session_state.final_audio, st.session_state.remixer.sr, format='WAV')
-            st.audio(buf.getvalue(), format='audio/wav')
-            st.download_button("Download Remix WAV", buf, "remix.wav", type="primary", use_container_width=True)
+    # Section 4: Remix Result
+    if st.session_state.timeline and st.session_state.final_audio is not None:
+        st.divider(); st.subheader("4. Generated Remix Result")
+        st.pyplot(plot_remix_waveform(st.session_state.final_audio, remixer.sr, st.session_state.timeline, st.session_state.final_dur))
+        st.success(f"Remix Ready: {st.session_state.final_dur:.1f}s")
+        buf = io.BytesIO(); sf.write(buf, st.session_state.final_audio, remixer.sr, format='WAV')
+        st.audio(buf.getvalue()); st.download_button("📥 Download Remix WAV", buf, "remix.wav", type="primary")
 
-elif not uploaded_file:
-    st.info("👋 Upload an audio file to start.")
+else: st.info("👋 Please upload an audio file in the sidebar and run full analysis to begin.")
