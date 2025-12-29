@@ -536,6 +536,30 @@ def plot_interactive_waveform(y, sr, beat_times):
     )
     return fig
 
+def plot_mini_waveform(y):
+    """生成微型波形图"""
+    # 显式关闭之前的图，防止内存泄漏（虽然 st.pyplot 会处理，但为了安全）
+    plt.close('all')
+    
+    fig, ax = plt.subplots(figsize=(4, 1))
+    # 降采样以提高性能
+    step = max(1, len(y) // 400)
+    y_subs = y[::step]
+    
+    # 居中绘制
+    ax.plot(y_subs, color='#00CC96', linewidth=0.8)
+    
+    # 锁定 Y 轴范围保持视觉一致性
+    ax.set_ylim(-1.1, 1.1)
+    ax.axis('off') # 隐藏坐标轴
+    
+    # 透明背景，适配暗色模式
+    fig.patch.set_alpha(0.0)
+    ax.patch.set_alpha(0.0)
+    
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    return fig
+
 # --- Sidebar Upload ---
 with st.sidebar:
     st.header("Upload Audio")
@@ -688,6 +712,10 @@ elif st.session_state.remixer:
                         # Normalize for preview
                         mx = np.max(np.abs(chunk))
                         if mx > 0: chunk = chunk / mx * 0.95
+                        
+                        # Show waveform
+                        st.pyplot(plot_mini_waveform(chunk), use_container_width=True, transparent=True)
+
                         # Short fades to avoid clicks
                         chunk = apply_short_fade(chunk, remixer.sr, fade_ms=5)
                         

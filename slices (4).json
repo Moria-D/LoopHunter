@@ -65,43 +65,43 @@
   {
     "id": 10,
     "start": 4.319,
-    "end": 4.897,
-    "duration": 0.578,
+    "end": 4.783,
+    "duration": 0.464,
     "label": "Slice 10"
   },
   {
     "id": 11,
-    "start": 4.897,
-    "end": 5.341,
-    "duration": 0.444,
+    "start": 4.783,
+    "end": 5.317,
+    "duration": 0.534,
     "label": "Slice 11"
   },
   {
     "id": 12,
-    "start": 5.341,
-    "end": 5.831,
-    "duration": 0.491,
+    "start": 5.317,
+    "end": 5.759,
+    "duration": 0.441,
     "label": "Slice 12"
   },
   {
     "id": 13,
-    "start": 5.831,
-    "end": 6.316,
-    "duration": 0.485,
+    "start": 5.759,
+    "end": 6.246,
+    "duration": 0.488,
     "label": "Slice 13"
   },
   {
     "id": 14,
-    "start": 6.316,
-    "end": 6.826,
-    "duration": 0.51,
+    "start": 6.246,
+    "end": 6.711,
+    "duration": 0.465,
     "label": "Slice 14"
   },
   {
     "id": 15,
-    "start": 6.826,
+    "start": 6.711,
     "end": 7.289,
-    "duration": 0.463,
+    "duration": 0.578,
     "label": "Slice 15"
   },
   {
