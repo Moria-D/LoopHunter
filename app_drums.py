@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import plotly.graph_objects as go
 import scipy.signal
+from utils_bpm import calculate_global_beat_duration
 
 # Import our backend modules
 from division import AudioRemixer
@@ -90,6 +91,10 @@ st.caption("AI-powered tool for BPM-based audio slicing.")
 
 if 'remixer' not in st.session_state: st.session_state.remixer = None
 if 'beat_slices' not in st.session_state: st.session_state.beat_slices = None
+# Fix potential state corruption from previous version where tuple was returned
+if isinstance(st.session_state.beat_slices, tuple):
+    st.session_state.beat_slices = st.session_state.beat_slices[0]
+
 if 'bpm_info' not in st.session_state: st.session_state.bpm_info = None
 
 def estimate_bpm_from_times(times_sec):
@@ -340,347 +345,133 @@ def refine_beat_times(y, sr, beat_times):
 
 def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
     """
-    更“好听”的 BPM 切片：
-    - 先用能量分割估计有效起止，避免底噪/静音干扰
-    - 用 beat_times 推断稳定 period，并生成更规整的 beat 网格（更一致）
-    - 每个切点先吸附瞬态，再微调到过零点，减少爆音/截断感
-    - 默认丢弃/合并过短的“弱起/尾巴”切片（仍保持按 BPM 网格）
+    Strict Global Quantum Grid Slicing:
+    - Calculates a single global 'beat_duration' (period) using linear regression on beat times.
+    - Generates slices strictly on this grid: t = offset + k * period.
+    - Ensures all slices (except maybe first/last) have identical duration.
     """
     total_duration = float(total_duration)
     if total_duration <= 0:
         total_duration = float(len(y) / sr)
 
-    # 0) 有效内容范围（更准的全曲起止）
-    active_start, active_end = detect_active_bounds(y, sr, top_db=45)
-    active_start = max(0.0, min(active_start, total_duration))
-    active_end = max(active_start, min(active_end, total_duration))
-
-    # 1) 先做瞬态吸附（避免切在“半山腰”）
-    bt = np.array(beat_times, dtype=float) if beat_times is not None else np.array([], dtype=float)
-    bt = bt[np.isfinite(bt)]
-    bt = bt[(bt >= 0.0) & (bt <= total_duration)]
-    bt = np.sort(np.unique(bt))
-
-    if bt.size > 0:
-        bt = refine_beat_times(y, sr, bt)
-        bt = bt[(bt >= 0.0) & (bt <= total_duration)]
-        bt = np.sort(np.unique(bt))
-
-    # 2) 推断 period（优先使用 bpm_override；否则用 beat_times/tempo）
-    period = None
-    if bpm_override is not None:
-        try:
-            b = float(bpm_override)
-            if np.isfinite(b) and b > 0:
-                period = float(60.0 / b)
-        except Exception:
-            period = None
-    if bt.size >= 3:
-        diffs = np.diff(bt)
-        diffs = diffs[(diffs > 0.12) & (diffs < 2.0)]
-        if diffs.size > 0:
-            period = float(np.median(diffs))
-    if period is None or period <= 0:
-        tempo = estimate_bpm_librosa(y, sr)
-        if tempo and tempo > 0:
-            period = float(60.0 / tempo)
-        else:
-            # 兜底：假设 120 BPM
-            period = 0.5
-
-    # 3) 生成更规整的 beat 网格（让切片长度更一致）
-    grid = []
-    if bt.size > 0:
-        anchor = float(bt[0])
-    else:
-        anchor = active_start
-
-    # 让网格覆盖有效内容范围（略扩一点，防止边界漏掉）
-    start_n = int(np.floor((active_start - anchor) / period)) - 1
-    end_n = int(np.ceil((active_end - anchor) / period)) + 1
-    for n in range(start_n, end_n + 1):
-        t = anchor + n * period
-        if active_start - 0.25 * period <= t <= active_end + 0.25 * period:
-            grid.append(float(t))
-    grid = np.sort(np.unique(np.array(grid, dtype=float)))
-
-            # 3.5) 尝试将网格对齐到检测到的 beat_times（修正累积漂移）
-    # 线性网格容易在后面产生累积误差，导致切点偏离（如 slice 10 偏后）。
-    # 这里利用 librosa 检测到的 beat_times（通常更贴合音频变化）来修正网格位置。
-    if bt.size > 0:
-        synced_grid = []
-        # 允许最大漂移窗口：周期的一半或固定值，取较小值防止跳拍
-        # 0.35 * period 能容忍一定程度的 tempo 变化，同时避免吸附到相邻拍
-        sync_window = 0.35 * period if period and period > 0 else 0.15
-        
-        # 针对末尾部分（slice 15+）可能出现的更大累积漂移，适当放宽末端窗口
-        # 或者增加全局同步的强度：不仅仅是单次比对，而是“拉链式”同步
-        
-        for i, g in enumerate(grid):
-            # 找最近的检测 beat
-            # 改进：不仅找绝对距离最近的，还要考虑方向性
-            # 如果 g 已经明显晚于最近的 beat（即 g > nearest），说明网格偏后了，应该拉回来
-            # 如果 g 明显早于最近的 beat，说明网格偏前了，也应该拉过去
-            
-            idx = (np.abs(bt - g)).argmin()
-            nearest = bt[idx]
-            dist = abs(nearest - g)
-            
-            # 动态调整窗口：越靠后的点，允许的漂移可能稍微大一点（因为线性误差会累积）
-            # 但也不能无限大，否则会跳拍。这里尝试简单的线性增加权重，或者保持固定但略微放宽。
-            current_window = sync_window * (1.0 + 0.05 * i) # 稍微随索引增加一点容忍度
-            current_window = min(current_window, 0.45 * period if period else 0.25)
-
-            # 如果在允许范围内，说明检测到了对应的 beat，优先使用检测值（因为它已经包含瞬态对齐）
-            if dist < current_window:
-                synced_grid.append(nearest)
-            else:
-                # 即使没有完全匹配上 beat，如果它离前一个 synced 点太近（< 0.5 period），可能是一个错误的中间点
-                # 这里简单保留原网格，后续靠 refine_beat_times 微调
-                synced_grid.append(g)
-        
-        # 重新排序并去重
-        grid = np.array(synced_grid)
-        grid = np.sort(np.unique(grid))
-
-    # NEW: 增加一个额外的强制对齐步骤
-    # 有时候同步窗口还是太保守，或者 beat_times 检测本身有微小误差。
-    # 这里我们引入一个更激进的策略：如果一个网格点 g 距离 ideal_g (n * period) 偏差超过 10%，
-    # 并且附近有更强的 onset 能量峰值，强制吸附到峰值。
+    # 1. Calculate Global Parameters (Period & Offset)
+    period, offset = calculate_global_beat_duration(beat_times, total_duration, bpm_override)
     
-    # 4) 把网格吸附到最近瞬态（小窗口内），避免机械切割
-    # 再次运行 refine 以确保即使是未同步的网格点也能贴合瞬态
-    # 并且再次过滤掉超出范围的点
-    grid = refine_beat_times(y, sr, grid)
+    # 2. Generate Grid Points
+    # We want to cover from time=0 to time=total_duration
+    # Grid formula: t = offset + k * period
+    # Find start_k such that offset + k * period >= 0 (or slightly before 0 if close)
     
-    # 4.2) 再次进行更严格的网格修正 (Post-refinement Check)
-    # 这是为了解决 Slice 11 这种微小“滑移”到下一个瞬态的问题。
-    if period and period > 0:
-        strict_grid = []
-        if len(grid) > 0:
-            strict_grid.append(grid[0])
-            for k in range(1, len(grid)):
-                prev = strict_grid[-1]
-                curr = grid[k]
-                diff = curr - prev
-                
-                # 如果间隔偏大 (1.08x - 1.4x)，很可能是吸附到了稍晚的瞬态
-                if 1.08 * period < diff < 1.4 * period:
-                     ideal_pos = prev + period
-                     # 在 ideal_pos 附近 (±0.1s) 重新搜索最强的 onset 能量
-                     # 而不仅仅是依赖 librosa 的 beat_times (因为它可能漏掉或选错)
-                     
-                     # 定义搜索范围
-                     search_start = ideal_pos - 0.1
-                     search_end = ideal_pos + 0.1
-                     
-                     # 转换到帧索引
-                     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-                     start_frame = librosa.time_to_frames(search_start, sr=sr)
-                     end_frame = librosa.time_to_frames(search_end, sr=sr)
-                     
-                     if start_frame < end_frame and end_frame < len(onset_env):
-                         local_env = onset_env[start_frame:end_frame]
-                         if len(local_env) > 0:
-                             # 找局部最大能量点
-                             max_idx = np.argmax(local_env)
-                             best_time = librosa.frames_to_time(start_frame + max_idx, sr=sr)
-                             
-                             # 如果这个能量点比当前的 curr 明显更早，且更接近理想位置
-                             if abs(best_time - ideal_pos) < abs(curr - ideal_pos) and curr - best_time > 0.03:
-                                 curr = best_time
-                
-                strict_grid.append(curr)
-            grid = np.array(strict_grid)
-
-    grid = grid[(grid >= 0.0) & (grid <= total_duration)]
-    grid = np.sort(np.unique(grid))
-
-    # 4.5) 强制修正：如果某个点与它后面的点间隔过短（< 0.8 * period），且该点未被同步修正，
-    # 往往意味着这个点是漂移后的错误点，而后面的点才是正确的下一拍。
+    if period <= 0: period = 0.5 # Safety
     
-    # NEW: 专门针对“尾奏起始点”（End Tail Start）的优化
-    # 用户反馈尾奏切片（最后一个切片）的开始点容易偏后。
-    # 这通常是因为最后一拍的瞬态判定被吸附到了后续的余音上。
-    # 我们找到有效范围内 (<= active_end) 的最后两个 grid 点
-    valid_indices = np.where((grid >= active_start) & (grid <= active_end))[0]
-    if len(valid_indices) >= 2:
-        last_idx = valid_indices[-1]
-        last_g = grid[last_idx]
-        prev_g = grid[valid_indices[-2]]
-        
-        # 定义搜索窗口：在最后一个网格点的前面寻找更早的起跳点
-        # 窗口大小：0.35 * period (约 0.15s - 0.2s)
-        win_size = 0.35 * period if period else 0.3
-        # 搜索范围：从 (last_g - win_size) 到 (last_g - 0.02)
-        # 注意不要退到上一个 beat 之后太近的地方
-        search_start = max(prev_g + 0.1, last_g - win_size)
-        search_end = last_g - 0.02 
-        
-        if search_start < search_end:
-            # 使用 RMS 能量检测上升沿
-            s_samp = int(search_start * sr)
-            e_samp = int(search_end * sr)
-            if 0 <= s_samp < e_samp < len(y):
-                chunk = y[s_samp:e_samp]
-                # 计算 RMS (Short-term energy)
-                rms = librosa.feature.rms(y=chunk, frame_length=512, hop_length=256)[0]
-                
-                if len(rms) > 1:
-                    # 找变化率最大的点 (Onset Attack)
-                    rms_diff = np.diff(rms)
-                    if len(rms_diff) > 0:
-                        max_diff_idx = np.argmax(rms_diff)
-                        max_val = rms_diff[max_diff_idx]
-                        
-                        # 阈值判定：必须有足够的能量突变 (防止噪音触发)
-                        if max_val > 0.002: 
-                             onset_time = search_start + librosa.frames_to_time(max_diff_idx, sr=sr, hop_length=256)
-                             
-                             # 只有当这个新点比原点显著早（>0.03s）时才替换
-                             if last_g - onset_time > 0.03:
-                                 grid[last_idx] = onset_time
+    start_k = int(np.floor((0.0 - offset) / period))
     
-    # 尝试检查间隔异常 (漏拍补救)：
-    if period and period > 0:
-        valid_grid = []
-        if len(grid) > 0:
-            valid_grid.append(grid[0])
-            for k in range(1, len(grid)):
-                prev = valid_grid[-1]
-                curr = grid[k]
-                diff = curr - prev
-                
-                # 如果间隔明显大于 1.5 倍周期（漏拍），尝试在中间补一个检测到的 beat
-                if diff > 1.5 * period:
-                    # 找中间有没有漏掉的 beat
-                    mid_target = prev + period
-                    # 在 mid_target 附近找真实 beat
-                    mid_idx = (np.abs(bt - mid_target)).argmin() if len(bt) > 0 else -1
-                    if mid_idx != -1:
-                        mid_beat = bt[mid_idx]
-                        # 如果这个 beat 确实在中间
-                        if prev < mid_beat < curr:
-                            valid_grid.append(mid_beat)
-                
-                # NEW: 针对 Slice 11 稍微偏长的情况（1.1 - 1.4 倍周期）
-                # 这种情况通常不是完全漏拍，而是吸附到了错误的（较晚的）瞬态
-                elif 1.05 * period < diff < 1.45 * period:
-                     ideal_next = prev + period
-                     # 我们要找的是在 ideal_next 左侧（更早）的一个潜藏 beat
-                     # 如果当前的 curr 明显比 ideal_next 晚 (> 0.05s)
-                     
-                     # 1. 首先尝试在 beat_times 里找
-                     better_idx = (np.abs(bt - ideal_next)).argmin() if len(bt) > 0 else -1
-                     
-                     found_better = False
-                     if better_idx != -1:
-                         better_beat = bt[better_idx]
-                         # 如果 better_beat 在 ideal_next 附近 (±0.08s) 且比 curr 明显早
-                         if abs(better_beat - ideal_next) < 0.08 * period and curr - better_beat > 0.04:
-                             curr = better_beat
-                             found_better = True
-                     
-                     # 2. 如果 beat_times 里没找到，尝试用能量包络找 (Hard Search)
-                     # 很多时候弱拍会被 librosa.beat 忽略，但 onset 能量还在
-                     if not found_better:
-                         # 搜索窗口：理想位置的前后 10% 周期
-                         # 重心稍微前移，因为我们怀疑现在的点晚了
-                         search_start = ideal_next - 0.15 * period
-                         search_end = ideal_next + 0.05 * period
-                         
-                         # 计算局部 onset strength
-                         s_frame = librosa.time_to_frames(search_start, sr=sr)
-                         e_frame = librosa.time_to_frames(search_end, sr=sr)
-                         
-                         # 还需要整个 envelope，避免重复计算，这里局部算一下或者传入
-                         # 为了性能，这里只算局部的 rms 突变可能不够，还是调用 librosa
-                         # 注意：这步比较耗时，但只针对异常 slice 运行
-                         
-                         # 简单方案：找振幅包络的上升沿 (Amplitude Rise)
-                         # 提取波形片段
-                         s_samp = int(search_start * sr)
-                         e_samp = int(search_end * sr)
-                         if 0 <= s_samp < e_samp < len(y):
-                             chunk = y[s_samp:e_samp]
-                             # 计算 RMS 能量曲线
-                             hop = 256
-                             rms = librosa.feature.rms(y=chunk, frame_length=512, hop_length=hop)[0]
-                             # 找 RMS 增量最大的地方 (Onset)
-                             if len(rms) > 1:
-                                 rms_diff = np.diff(rms)
-                                 # 简单的峰值检测
-                                 max_d_idx = np.argmax(rms_diff)
-                                 if rms_diff[max_d_idx] > 0.005: # 阈值：有一定能量突变
-                                     # 换算回时间
-                                     onset_time = search_start + librosa.frames_to_time(max_d_idx, sr=sr, hop_length=hop)
-                                     
-                                     # 如果这个新发现的 onset 确实比 curr 早
-                                     if curr - onset_time > 0.04:
-                                         curr = onset_time
-
-                valid_grid.append(curr)
-            grid = np.array(valid_grid)
-    
-    # 5) 构造切点：默认从“第一个完整拍”开始（减少很短 slice1）
-    cuts = []
-    # 找到第一个 >= active_start 的 beat 切点
-    grid_in = grid[(grid >= active_start) & (grid <= active_end)]
-    if grid_in.size == 0:
-        # fallback：至少输出一个整体切片
-        return [{
-            "id": 1,
-            "start": round(active_start, 3),
-            "end": round(active_end, 3),
-            "duration": round(active_end - active_start, 3),
-            "label": "Slice 1"
-        }]
-
-    first_cut = float(grid_in[0])
-    # 如果 active_start 到 first_cut 太短（弱起/噪声），直接从 first_cut 开始
-    if (first_cut - active_start) < 0.5 * period:
-        cuts.append(first_cut)
-    else:
-        cuts.append(active_start)
-        cuts.append(first_cut)
-
-    # 中间切点
-    for t in grid_in[1:]:
-        cuts.append(float(t))
-
-    # 末尾：如果最后残余太短，就合并到上一拍（避免很短的最后一个 slice）
-    if len(cuts) >= 2:
-        rem = active_end - cuts[-1]
-        if rem < 0.25 * period:
-            # 合并：移除最后一个 beat 切点，让最后一段更长更自然
-            if len(cuts) >= 3:
-                cuts.pop()
-    cuts.append(active_end)
-
-    # 6) 每个切点微调到过零点（减少点击音）
-    refined_cuts = []
-    for t in cuts:
-        refined_cuts.append(refine_time_to_zero_crossing(y, sr, t, window_ms=8))
-    refined_cuts = np.array(refined_cuts, dtype=float)
-    refined_cuts = np.sort(np.unique(refined_cuts))
-
-    # 7) 生成 slices
     slices = []
     sid = 1
-    for i in range(len(refined_cuts) - 1):
-        s = float(refined_cuts[i])
-        e = float(refined_cuts[i + 1])
-        if e - s < 0.03:
+    
+    # Grid loop
+    # We maintain strict adherence to grid points for start/end
+    
+    current_k = start_k
+    
+    # Determine first slice start
+    # If the first grid point is far after 0, we might need an Intro slice [0, grid_point]
+    # But usually offset is chosen to align with the first beat.
+    
+    # Let's iterate grid points until we exceed total_duration
+    while True:
+        # Calculate theoretical grid points
+        t_start = offset + current_k * period
+        t_end = offset + (current_k + 1) * period
+        
+        # Adjust for file boundaries
+        
+        # If this "beat" is entirely before 0, skip
+        if t_end <= 0.001:
+            current_k += 1
             continue
-        slices.append({
-            "id": sid,
-            "start": round(s, 3),
-            "end": round(e, 3),
-            "duration": round(e - s, 3),
-            "label": f"Slice {sid}"
-        })
-        sid += 1
-    return slices
+            
+        # If start is before 0, clamp to 0 (First slice might be shorter if offset is negative)
+        # OR if offset > 0, we might have a gap [0, offset].
+        
+        # Strategy:
+        # If t_start < 0, we clamp start to 0. This slice will be shorter.
+        # If t_start > 0 and this is the very first processed slice, we might check if there is a gap [0, t_start]
+        # But 'start_k' logic tries to include the point before 0.
+        
+        # Refined Logic:
+        # Let's start from 0.0 explicitly.
+        # Find the next grid point > 0.
+        # That defines the first segment.
+        pass
+        break 
+    
+    # Re-implementation of loop for clarity
+    current_time = 0.0
+    
+    # Find first positive grid boundary
+    # k such that offset + k * period > 0
+    # If offset=0.1, period=1.0. k=0 -> 0.1. First boundary at 0.1.
+    # If offset=-0.1, period=1.0. k=0 -> -0.1. k=1 -> 0.9. First boundary at 0.9? 
+    # Wait, if offset=-0.1, the beat started at -0.1. The slice should go -0.1 to 0.9.
+    # Clipped to 0.0 to 0.9.
+    
+    first_boundary_k = int(np.floor((0.001 - offset) / period)) + 1
+    next_grid_time = offset + first_boundary_k * period
+    
+    # If there is a significant gap before the first grid alignment (intro)
+    if next_grid_time > 0.02:
+         # Add Intro slice [0, next_grid_time]
+         # This slice might NOT be 'beat_duration' length. 
+         # But the user asked for shared beat_duration. 
+         # Intro is exception? usually yes.
+         
+         slices.append({
+             "id": sid,
+             "start": 0.0,
+             "end": round(next_grid_time, 3),
+             "duration": round(next_grid_time, 3),
+             "label": "Intro / Pickup"
+         })
+         sid += 1
+         current_time = next_time = next_grid_time
+         current_k = first_boundary_k
+    else:
+         # We are practically at 0 (or negative), so start first full slice from 0?
+         # Or align strictly to grid even if it means start=0.001?
+         # Let's align strictly.
+         current_k = first_boundary_k
+         
+    # Generate Full Slices
+    while True:
+        t_start_grid = offset + current_k * period
+        t_end_grid = offset + (current_k + 1) * period
+        
+        # If we are starting effectively at 0 (handled above or first loop)
+        real_start = max(0.0, t_start_grid)
+        real_end = min(total_duration, t_end_grid)
+        
+        if real_start >= total_duration - 0.01:
+            break
+            
+        dur = real_end - real_start
+        
+        if dur > 0.01:
+            slices.append({
+                "id": sid,
+                "start": round(real_start, 3),
+                "end": round(real_end, 3),
+                "duration": round(dur, 3),
+                "label": f"Slice {sid}"
+            })
+            sid += 1
+            
+        current_k += 1
+        
+        if real_end >= total_duration:
+            break
+            
+    return slices, period
 
 def generate_fcpxml(slices, filename, sample_rate, total_duration):
     xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -847,7 +638,7 @@ with st.sidebar:
                 # NEW: Passing y and sr for refinement
                 bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=75.0, bpm_max=200.0)
                 st.session_state.bpm_info = bpm_info
-                slices = get_beat_slices(
+                slices, _ = get_beat_slices(
                     remixer.y,
                     remixer.sr,
                     remixer.beat_times,
@@ -894,9 +685,19 @@ elif st.session_state.remixer:
 
     est_bpm = float(bpm_info.get("bpm", 0.0) or 0.0)
     
+    # Try to find the used beat_duration
+    # Since get_beat_slices returns it, we could store it in session state, but for now let's infer or recalculate
+    # Actually, simpler to look at the first few slices if they are regular
+    beat_dur_display = 0.0
+    if st.session_state.beat_slices and len(st.session_state.beat_slices) > 1:
+         # Take median of first 5 slices duration
+         durs = [s['duration'] for s in st.session_state.beat_slices[:5] if 'duration' in s]
+         if durs:
+             beat_dur_display = np.median(durs)
+    
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("BPM（估计）", f"{est_bpm:.1f}")
-    c2.metric("总时长", f"{remixer.duration:.2f}s")
+    c2.metric("Beat Duration (Shared)", f"{beat_dur_display:.4f}s")
     c3.metric("切片数量", f"{len(st.session_state.beat_slices) if st.session_state.beat_slices else 0}")
     c4.metric("采样率", f"{remixer.sr} Hz")
 
@@ -916,7 +717,7 @@ elif st.session_state.remixer:
                 # Update session BPM info to force the override
                 st.session_state.bpm_info = {"bpm": manual_bpm, "confidence": 1.0, "base_bpm": manual_bpm, "candidates": []}
                 # Re-run slicing
-                slices = get_beat_slices(
+                slices, _ = get_beat_slices(
                     remixer.y,
                     remixer.sr,
                     remixer.beat_times,
@@ -935,7 +736,12 @@ elif st.session_state.remixer:
     # NOTE: beat_times passed to plot should ideally be the REFINED start times from slices
     # to match what the user sees in the table.
     # Extract start times from slices for plotting consistency
-    refined_starts = [s['start'] for s in st.session_state.beat_slices if s['start'] < remixer.duration]
+    refined_starts = []
+    if st.session_state.beat_slices:
+        for s in st.session_state.beat_slices:
+            if isinstance(s, dict) and 'start' in s:
+                if s['start'] < remixer.duration:
+                    refined_starts.append(s['start'])
     
     fig_interactive = plot_interactive_waveform(remixer.y, remixer.sr, refined_starts)
     st.plotly_chart(fig_interactive, use_container_width=True)
@@ -966,17 +772,25 @@ elif st.session_state.remixer:
             cols = st.columns(5)
             for idx, s in enumerate(row_items):
                 with cols[idx]:
+                    # Ensure s is a dictionary
+                    if not isinstance(s, dict):
+                        continue
+                        
+                    label = s.get('label', f'Slice {idx}')
+                    start_t = s.get('start', 0.0)
+                    end_t = s.get('end', 0.0)
+                    
                     # Card-like container visual
                     st.markdown(f"""
                     <div style="background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #363945; margin-bottom: 10px;">
-                        <div style="font-weight: bold; color: #E0E2E6; margin-bottom: 4px;">{s['label']}</div>
-                        <div style="font-size: 0.8em; color: #A3A8B8;">{s['start']:.2f}s - {s['end']:.2f}s</div>
+                        <div style="font-weight: bold; color: #E0E2E6; margin-bottom: 4px;">{label}</div>
+                        <div style="font-size: 0.8em; color: #A3A8B8;">{start_t:.2f}s - {end_t:.2f}s</div>
                     </div>
                     """, unsafe_allow_html=True)
                 
                     # Extract audio chunk
-                    start_samp = int(s['start'] * remixer.sr)
-                    end_samp = int(s['end'] * remixer.sr)
+                    start_samp = int(start_t * remixer.sr)
+                    end_samp = int(end_t * remixer.sr)
                     end_samp = min(end_samp, len(remixer.y))
                     
                     if start_samp < end_samp:
