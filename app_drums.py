@@ -337,6 +337,31 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
             grid.append(float(t))
     grid = np.sort(np.unique(np.array(grid, dtype=float)))
 
+    # 3.5) 尝试将网格对齐到检测到的 beat_times（修正累积漂移）
+    # 线性网格容易在后面产生累积误差，导致切点偏离（如 slice 10 偏后）。
+    # 这里利用 librosa 检测到的 beat_times（通常更贴合音频变化）来修正网格位置。
+    if bt.size > 0:
+        synced_grid = []
+        # 允许最大漂移窗口：周期的一半或固定值，取较小值防止跳拍
+        # 0.35 * period 能容忍一定程度的 tempo 变化，同时避免吸附到相邻拍
+        sync_window = 0.35 * period if period and period > 0 else 0.15
+        
+        for g in grid:
+            # 找最近的检测 beat
+            idx = (np.abs(bt - g)).argmin()
+            nearest = bt[idx]
+            dist = abs(nearest - g)
+            
+            # 如果在允许范围内，说明检测到了对应的 beat，优先使用检测值（因为它已经包含瞬态对齐）
+            if dist < sync_window:
+                synced_grid.append(nearest)
+            else:
+                synced_grid.append(g)
+        
+        # 重新排序并去重
+        grid = np.array(synced_grid)
+        grid = np.sort(np.unique(grid))
+
     # 4) 把网格吸附到最近瞬态（小窗口内），避免机械切割
     grid = refine_beat_times(y, sr, grid)
     grid = grid[(grid >= 0.0) & (grid <= total_duration)]
