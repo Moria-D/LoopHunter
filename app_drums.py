@@ -14,6 +14,7 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import plotly.graph_objects as go
+import scipy.signal
 
 # Import our backend modules
 from division import AudioRemixer
@@ -67,77 +68,124 @@ def estimate_bpm_librosa(y, sr):
     except Exception:
         return 0.0
 
-def estimate_bpm_best(y, sr, bpm_min=60.0, bpm_max=200.0, hop_length=512):
+def estimate_bpm_best(y, sr, bpm_min=75.0, bpm_max=200.0, hop_length=512):
     """
-    更准 BPM：基于打击乐(percussive) tempogram 峰值 + 倍/半拍 + 3/2(常见 125 vs 83.33) 等比率候选，
-    用 tempogram 强度打分选最佳。
-
-    返回 dict:
-      - bpm: 最终 bpm
-      - confidence: 0~1
-      - base_bpm: tempogram 主峰 bpm
-      - candidates: [(bpm, score), ...] 按 score 降序
+    BPM 估计：使用 JMPerez/beats-audio-api 的算法
+    (基于 100-150Hz 低频能量峰值检测与间隔统计)
+    
+    参数:
+    - bpm_min: BPM 下限 (默认 75.0，以避免 134 BPM 被误判为 67)
+    - bpm_max: BPM 上限 (默认 200.0)
     """
     try:
-        # 只取打击乐成分更稳
-        _, y_perc = librosa.effects.hpss(y)
-        onset_env = librosa.onset.onset_strength(y=y_perc, sr=sr, hop_length=hop_length)
-        if onset_env is None or len(onset_env) < 8:
+        # 1. 滤波：Bandpass 100-150Hz (Lowpass 150 + Highpass 100)
+        # Web Audio API 默认 Biquad 是 12dB/oct (2nd order)
+        sos_lp = scipy.signal.butter(2, 150, 'low', fs=sr, output='sos')
+        y_lp = scipy.signal.sosfilt(sos_lp, y)
+        
+        sos_hp = scipy.signal.butter(2, 100, 'high', fs=sr, output='sos')
+        y_filt = scipy.signal.sosfilt(sos_hp, y_lp)
+        
+        # 2. 峰值检测 (Get Peaks)
+        # 将音频分为 0.5s 的片段，找每段最大值
+        part_size = int(sr * 0.5)
+        if part_size == 0: return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
+        
+        parts = len(y_filt) // part_size
+        peaks = []
+        
+        for i in range(parts):
+            start = i * part_size
+            end = start + part_size
+            chunk = y_filt[start:end]
+            
+            if len(chunk) == 0: continue
+            
+            # 找最大振幅
+            max_idx = np.argmax(np.abs(chunk))
+            max_vol = float(np.abs(chunk[max_idx]))
+            
+            if max_vol > 0:
+                peaks.append({
+                    'position': start + max_idx,
+                    'volume': max_vol
+                })
+        
+        if not peaks:
+             return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
+
+        # 按音量降序
+        peaks.sort(key=lambda x: x['volume'], reverse=True)
+        
+        # 取前 50% 最响的
+        take_count = max(1, len(peaks) // 2)
+        peaks = peaks[:take_count]
+        
+        # 按位置(时间)重新排序
+        peaks.sort(key=lambda x: x['position'])
+        
+        # 3. 间隔统计 (Get Intervals)
+        groups = []
+        
+        for index, peak in enumerate(peaks):
+            # 对比接下来的 10 个峰值
+            for i in range(1, 10):
+                if index + i >= len(peaks):
+                    break
+                
+                neighbor = peaks[index + i]
+                diff_samples = neighbor['position'] - peak['position']
+                if diff_samples <= 0: continue
+                
+                tempo = (60.0 * sr) / diff_samples
+                
+                # JMPerez 逻辑：归一化到指定范围 (默认 75-200)
+                # 如果 bpm_min/bpm_max 参数未指定，则使用 75/200 默认值
+                # 原算法是 90-180，这里放宽以支持 80 BPM，并将下限设为 75 以避免 134 被误判为 67
+                min_limit = bpm_min if bpm_min > 0 else 75.0
+                max_limit = bpm_max if bpm_max > 0 else 200.0
+                
+                while tempo < min_limit:
+                    tempo *= 2
+                while tempo > max_limit:
+                    tempo /= 2
+                    
+                tempo = round(tempo)
+                
+                # 统计
+                found = False
+                for g in groups:
+                    if g['tempo'] == tempo:
+                        g['count'] += 1
+                        found = True
+                        break
+                if not found:
+                    groups.append({'tempo': tempo, 'count': 1})
+        
+        if not groups:
             return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
 
-        # tempogram（自相关形式），对复杂音色/噪声更鲁棒
-        tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr, hop_length=hop_length)
-        if tg is None or tg.size == 0:
-            return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
+        # 按 count 降序
+        groups.sort(key=lambda x: x['count'], reverse=True)
+        
+        best_group = groups[0]
+        best_bpm = float(best_group['tempo'])
+        best_count = best_group['count']
+        
+        # 简单计算置信度
+        total_count = sum(g['count'] for g in groups)
+        confidence = float(best_count) / total_count if total_count > 0 else 0.0
+        
+        # 构造 candidates 格式
+        candidates = [(float(g['tempo']), float(g['count'])) for g in groups[:5]]
+        
+        return {
+            "bpm": best_bpm,
+            "confidence": confidence,
+            "base_bpm": best_bpm,
+            "candidates": candidates
+        }
 
-        tempos = librosa.tempo_frequencies(tg.shape[0], sr=sr, hop_length=hop_length)
-        tg_mean = np.mean(tg, axis=1)
-
-        # 主峰（base bpm）
-        mask = (tempos >= bpm_min) & (tempos <= bpm_max)
-        if not np.any(mask):
-            return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
-        idx0 = int(np.argmax(tg_mean[mask]))
-        base_bpm = float(tempos[mask][idx0])
-
-        # 候选比率：解决 half/double 以及 83.33 <-> 125（3/2）这类常见偏差
-        ratios = [1.0, 2.0, 0.5, 1.5, 2.0/3.0, 4.0/3.0, 3.0/4.0]
-        cand_bpms = []
-        for r in ratios:
-            b = base_bpm * r
-            if bpm_min <= b <= bpm_max:
-                cand_bpms.append(float(b))
-        # 也把 librosa 聚合 tempo 加进来（有时更稳）
-        lib_bpm = estimate_bpm_librosa(y, sr)
-        if bpm_min <= lib_bpm <= bpm_max:
-            cand_bpms.append(float(lib_bpm))
-            # 同样扩展比率（尤其是 3/2）
-            for r in [1.5, 2.0, 0.5, 2.0/3.0]:
-                b = lib_bpm * r
-                if bpm_min <= b <= bpm_max:
-                    cand_bpms.append(float(b))
-
-        # 去重（0.2 bpm 内视作同一个）
-        uniq = []
-        for b in cand_bpms:
-            if not any(abs(b - u) < 0.2 for u in uniq):
-                uniq.append(b)
-
-        # 用 tempogram 强度打分：找到最接近的 tempo bin
-        scored = []
-        for b in uniq:
-            j = int(np.argmin(np.abs(tempos - b)))
-            score = float(tg_mean[j])
-            scored.append((float(b), score))
-        scored.sort(key=lambda x: x[1], reverse=True)
-
-        if not scored:
-            return {"bpm": 0.0, "confidence": 0.0, "base_bpm": base_bpm, "candidates": []}
-
-        best_bpm, best_score = scored[0]
-        score_sum = float(np.sum([s for _, s in scored])) if scored else 0.0
-        confidence = float(best_score / score_sum) if score_sum > 0 else 0.0
-        return {"bpm": float(best_bpm), "confidence": confidence, "base_bpm": base_bpm, "candidates": scored[:8]}
     except Exception:
         return {"bpm": 0.0, "confidence": 0.0, "base_bpm": 0.0, "candidates": []}
 
@@ -493,7 +541,7 @@ with st.sidebar:
                 
                 # Generate Slices
                 # NEW: Passing y and sr for refinement
-                bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=60.0, bpm_max=200.0)
+                bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=75.0, bpm_max=200.0)
                 st.session_state.bpm_info = bpm_info
                 slices = get_beat_slices(
                     remixer.y,
@@ -537,7 +585,7 @@ elif st.session_state.remixer:
 
     bpm_info = st.session_state.bpm_info
     if not isinstance(bpm_info, dict) or bpm_info.get("bpm", 0) <= 0:
-        bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=60.0, bpm_max=200.0)
+        bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=75.0, bpm_max=200.0)
         st.session_state.bpm_info = bpm_info
 
     est_bpm = float(bpm_info.get("bpm", 0.0) or 0.0)
@@ -549,36 +597,31 @@ elif st.session_state.remixer:
     c4.metric("采样率", f"{remixer.sr} Hz")
 
     # 手动 BPM 修正
-    manual_bpm = st.number_input("手动修正 BPM（输入正确值后将强制重算切片）", value=est_bpm, min_value=10.0, max_value=300.0, step=0.1)
-    
-    # 只有当用户修改了 BPM 且与当前计算值不一致时，才显示“重新切片”按钮
-    # 或者简单点：只要这里的值和当前 session 里的不一样，就重算
-    if st.button("🔄 按此 BPM 重新切片"):
-        with st.spinner(f"正在按 BPM {manual_bpm} 重新生成切片..."):
-            # Update session BPM info to force the override
-            st.session_state.bpm_info = {"bpm": manual_bpm, "confidence": 1.0, "base_bpm": manual_bpm, "candidates": []}
-            # Re-run slicing
-            slices = get_beat_slices(
-                remixer.y,
-                remixer.sr,
-                remixer.beat_times,
-                remixer.duration,
-                bpm_override=manual_bpm
-            )
-            st.session_state.beat_slices = slices
-            st.rerun()
+    with st.expander("🛠️ 手动修正 BPM / 重新切片", expanded=False):
+        manual_bpm = st.number_input(
+            "输入 BPM 数值 (修改后将强制重算切片)", 
+            value=est_bpm, 
+            min_value=10.0, 
+            max_value=300.0, 
+            step=0.1,
+            format="%.1f"
+        )
+        
+        if st.button("🔄 按此 BPM 重新切片", use_container_width=True):
+            with st.spinner(f"正在按 BPM {manual_bpm} 重新生成切片..."):
+                # Update session BPM info to force the override
+                st.session_state.bpm_info = {"bpm": manual_bpm, "confidence": 1.0, "base_bpm": manual_bpm, "candidates": []}
+                # Re-run slicing
+                slices = get_beat_slices(
+                    remixer.y,
+                    remixer.sr,
+                    remixer.beat_times,
+                    remixer.duration,
+                    bpm_override=manual_bpm
+                )
+                st.session_state.beat_slices = slices
+                st.rerun()
 
-    with st.expander("BPM 详细信息（诊断）"):
-        st.write(f"- tempogram 主峰 BPM（base）: **{float(bpm_info.get('base_bpm', 0.0)):.2f}**")
-        st.write(f"- tempogram 候选最佳 BPM: **{est_bpm:.2f}**（置信度: **{float(bpm_info.get('confidence', 0.0)):.2f}**）")
-        st.write(f"- slices 间隔反推 BPM（仅供对比）: **{bpm_from_slices:.2f}**")
-        st.write(f"- librosa tempo（聚合）: **{bpm_lib:.2f}**")
-        cand_list = bpm_info.get("candidates", [])
-        if isinstance(cand_list, list) and len(cand_list) > 0:
-            st.write("- 候选列表（bpm / score）：")
-            for b, sc in cand_list:
-                st.write(f"  - {float(b):.2f} / {float(sc):.4f}")
-    
     st.divider()
     
     # --- BPM Slicer Visualization (No Tabs) ---
