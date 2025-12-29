@@ -24,11 +24,64 @@ st.set_page_config(layout="wide", page_title="LoopHunter - BPM Slicer")
 
 st.markdown("""
 <style>
-    .main { background-color: #0d1117; }
-    .stButton>button { width: 100%; border-radius: 6px; font-weight: 600; }
-    h1, h2, h3, p, label, .stMetricLabel { color: #c9d1d9 !important; }
-    .stMetricValue { color: #3b82f6 !important; }
-    .stDownloadButton button { height: 3rem; }
+    /* 全局深色背景与字体优化 */
+    .main { 
+        background-color: #0E1117; 
+        color: #FAFAFA;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+    
+    /* 按钮样式增强 */
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 8px; 
+        font-weight: 600; 
+        border: none;
+        padding: 0.6rem 1rem;
+        transition: all 0.2s ease;
+    }
+    .stButton>button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+    /* 主按钮（Analyze）特殊样式 */
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background: linear-gradient(90deg, #FF4B4B 0%, #FF2B2B 100%);
+        box-shadow: 0 2px 4px rgba(255, 75, 75, 0.2);
+    }
+    
+    /* 标题与文字颜色 */
+    h1, h2, h3 { color: #F0F2F6 !important; letter-spacing: -0.5px; }
+    p, label, .stMarkdown { color: #C4C9D6 !important; }
+    
+    /* Metric 组件优化 */
+    div[data-testid="stMetric"] {
+        background-color: #262730;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #363945;
+    }
+    .stMetricLabel { color: #A3A8B8 !important; font-size: 0.9rem !important; }
+    .stMetricValue { color: #4F8BF9 !important; font-weight: 700 !important; }
+
+    /* 下载按钮统一高度 */
+    .stDownloadButton button { height: 3.2rem; background-color: #262730; color: #E0E2E6; border: 1px solid #4A4E5A; }
+    .stDownloadButton button:hover { border-color: #6C7280; color: #FFFFFF; background-color: #363945; }
+    
+    /* 分割线颜色 */
+    hr { border-color: #363945; margin: 2rem 0; }
+    
+    /* Expander 样式 */
+    .streamlit-expanderHeader { 
+        background-color: #262730; 
+        border-radius: 6px; 
+        color: #E0E2E6;
+    }
+    
+    /* 侧边栏微调 */
+    section[data-testid="stSidebar"] {
+        background-color: #161920;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -337,7 +390,7 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
             grid.append(float(t))
     grid = np.sort(np.unique(np.array(grid, dtype=float)))
 
-    # 3.5) 尝试将网格对齐到检测到的 beat_times（修正累积漂移）
+            # 3.5) 尝试将网格对齐到检测到的 beat_times（修正累积漂移）
     # 线性网格容易在后面产生累积误差，导致切点偏离（如 slice 10 偏后）。
     # 这里利用 librosa 检测到的 beat_times（通常更贴合音频变化）来修正网格位置。
     if bt.size > 0:
@@ -346,16 +399,30 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
         # 0.35 * period 能容忍一定程度的 tempo 变化，同时避免吸附到相邻拍
         sync_window = 0.35 * period if period and period > 0 else 0.15
         
-        for g in grid:
+        # 针对末尾部分（slice 15+）可能出现的更大累积漂移，适当放宽末端窗口
+        # 或者增加全局同步的强度：不仅仅是单次比对，而是“拉链式”同步
+        
+        for i, g in enumerate(grid):
             # 找最近的检测 beat
+            # 改进：不仅找绝对距离最近的，还要考虑方向性
+            # 如果 g 已经明显晚于最近的 beat（即 g > nearest），说明网格偏后了，应该拉回来
+            # 如果 g 明显早于最近的 beat，说明网格偏前了，也应该拉过去
+            
             idx = (np.abs(bt - g)).argmin()
             nearest = bt[idx]
             dist = abs(nearest - g)
             
+            # 动态调整窗口：越靠后的点，允许的漂移可能稍微大一点（因为线性误差会累积）
+            # 但也不能无限大，否则会跳拍。这里尝试简单的线性增加权重，或者保持固定但略微放宽。
+            current_window = sync_window * (1.0 + 0.05 * i) # 稍微随索引增加一点容忍度
+            current_window = min(current_window, 0.45 * period if period else 0.25)
+
             # 如果在允许范围内，说明检测到了对应的 beat，优先使用检测值（因为它已经包含瞬态对齐）
-            if dist < sync_window:
+            if dist < current_window:
                 synced_grid.append(nearest)
             else:
+                # 即使没有完全匹配上 beat，如果它离前一个 synced 点太近（< 0.5 period），可能是一个错误的中间点
+                # 这里简单保留原网格，后续靠 refine_beat_times 微调
                 synced_grid.append(g)
         
         # 重新排序并去重
@@ -363,10 +430,46 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
         grid = np.sort(np.unique(grid))
 
     # 4) 把网格吸附到最近瞬态（小窗口内），避免机械切割
+    # 再次运行 refine 以确保即使是未同步的网格点也能贴合瞬态
+    # 并且再次过滤掉超出范围的点
     grid = refine_beat_times(y, sr, grid)
     grid = grid[(grid >= 0.0) & (grid <= total_duration)]
     grid = np.sort(np.unique(grid))
 
+    # 4.5) 强制修正：如果某个点与它后面的点间隔过短（< 0.8 * period），且该点未被同步修正，
+    # 往往意味着这个点是漂移后的错误点，而后面的点才是正确的下一拍。
+    # 针对 slice 15 结束太晚（即 slice 16 开始太晚 -> 实际上可能是 slice 15 的结束点漏掉了真实的 beat）
+    # 或者 slice 15 结束点（slice 16 起始点）虽然同步了，但因为窗口原因选错了。
+    
+    # 但根据描述：Slice 15 开始点正确，结束点太晚。这意味着 Slice 15 的持续时间太长了。
+    # 说明 Slice 15 原本应该在某个地方结束（Slice 16 开始），但那个切点被漏掉或推迟了。
+    # 可能是网格生成的点跳过了一个拍，或者吸附到了下一拍。
+    
+    # 尝试检查间隔异常：
+    if period and period > 0:
+        valid_grid = []
+        if len(grid) > 0:
+            valid_grid.append(grid[0])
+            for k in range(1, len(grid)):
+                prev = valid_grid[-1]
+                curr = grid[k]
+                diff = curr - prev
+                
+                # 如果间隔明显大于 1.5 倍周期（漏拍），尝试在中间补一个检测到的 beat
+                if diff > 1.5 * period:
+                    # 找中间有没有漏掉的 beat
+                    mid_target = prev + period
+                    # 在 mid_target 附近找真实 beat
+                    mid_idx = (np.abs(bt - mid_target)).argmin() if len(bt) > 0 else -1
+                    if mid_idx != -1:
+                        mid_beat = bt[mid_idx]
+                        # 如果这个 beat 确实在中间
+                        if prev < mid_beat < curr:
+                            valid_grid.append(mid_beat)
+                
+                valid_grid.append(curr)
+            grid = np.array(valid_grid)
+    
     # 5) 构造切点：默认从“第一个完整拍”开始（减少很短 slice1）
     cuts = []
     # 找到第一个 >= active_start 的 beat 切点
@@ -674,7 +777,7 @@ elif st.session_state.remixer:
     st.divider()
     
     # --- BPM Slicer Visualization (No Tabs) ---
-    st.subheader("BPM-Based Slicing Visualization")
+    st.subheader("📊 BPM-Based Slicing Visualization")
     
     # Interactive Plotly Waveform
     # NOTE: beat_times passed to plot should ideally be the REFINED start times from slices
@@ -688,6 +791,7 @@ elif st.session_state.remixer:
     # --- Slice Previews ---
     st.divider()
     st.subheader("🎵 Slice Previews (First 10)")
+    st.caption("Preview individual slices with their specific waveforms.")
     
     if st.session_state.beat_slices:
         preview_slices = st.session_state.beat_slices[:10]
@@ -699,8 +803,13 @@ elif st.session_state.remixer:
             cols = st.columns(5)
             for idx, s in enumerate(row_items):
                 with cols[idx]:
-                    st.markdown(f"**{s['label']}**")
-                    st.caption(f"{s['start']:.2f}s - {s['end']:.2f}s")
+                    # Card-like container visual
+                    st.markdown(f"""
+                    <div style="background-color: #262730; padding: 10px; border-radius: 8px; border: 1px solid #363945; margin-bottom: 10px;">
+                        <div style="font-weight: bold; color: #E0E2E6; margin-bottom: 4px;">{s['label']}</div>
+                        <div style="font-size: 0.8em; color: #A3A8B8;">{s['start']:.2f}s - {s['end']:.2f}s</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                     # Extract audio chunk
                     start_samp = int(s['start'] * remixer.sr)
@@ -729,7 +838,7 @@ elif st.session_state.remixer:
     st.divider()
 
     # Download Section
-    st.markdown("### Export All Slices")
+    st.markdown("### 💾 Export All Slices")
     col_d1, col_d2, col_d3 = st.columns(3)
     
     if st.session_state.beat_slices:
@@ -769,11 +878,11 @@ elif st.session_state.remixer:
         # FCPXML
         fcpxml_str = generate_fcpxml(slices_data, uploaded_file.name, int(remixer.sr), remixer.duration)
         col_d3.download_button(
-            label="📥 Download XML (.xml)",
+            label="📥 Download FCPXML",
             data=fcpxml_str,
-            file_name="slices.xml",
-            mime="application/xml",
-            help="这是 FCPXML 内容（可导入剪辑软件），仅将扩展名保存为 .xml。"
+            file_name="slices.fcpxml",
+            mime="text/xml", # FCP往往识别 .fcpxml 后缀，mime 用 text/xml 兼容性较好
+            help="可以直接拖入 Final Cut Pro 的时间线。"
         )
         
         with st.expander("View Slice Data Table"):
