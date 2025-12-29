@@ -498,14 +498,50 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
 
     # 4.5) 强制修正：如果某个点与它后面的点间隔过短（< 0.8 * period），且该点未被同步修正，
     # 往往意味着这个点是漂移后的错误点，而后面的点才是正确的下一拍。
-    # 针对 slice 15 结束太晚（即 slice 16 开始太晚 -> 实际上可能是 slice 15 的结束点漏掉了真实的 beat）
-    # 或者 slice 15 结束点（slice 16 起始点）虽然同步了，但因为窗口原因选错了。
     
-    # 但根据描述：Slice 15 开始点正确，结束点太晚。这意味着 Slice 15 的持续时间太长了。
-    # 说明 Slice 15 原本应该在某个地方结束（Slice 16 开始），但那个切点被漏掉或推迟了。
-    # 可能是网格生成的点跳过了一个拍，或者吸附到了下一拍。
+    # NEW: 专门针对“尾奏起始点”（End Tail Start）的优化
+    # 用户反馈尾奏切片（最后一个切片）的开始点容易偏后。
+    # 这通常是因为最后一拍的瞬态判定被吸附到了后续的余音上。
+    # 我们找到有效范围内 (<= active_end) 的最后两个 grid 点
+    valid_indices = np.where((grid >= active_start) & (grid <= active_end))[0]
+    if len(valid_indices) >= 2:
+        last_idx = valid_indices[-1]
+        last_g = grid[last_idx]
+        prev_g = grid[valid_indices[-2]]
+        
+        # 定义搜索窗口：在最后一个网格点的前面寻找更早的起跳点
+        # 窗口大小：0.35 * period (约 0.15s - 0.2s)
+        win_size = 0.35 * period if period else 0.3
+        # 搜索范围：从 (last_g - win_size) 到 (last_g - 0.02)
+        # 注意不要退到上一个 beat 之后太近的地方
+        search_start = max(prev_g + 0.1, last_g - win_size)
+        search_end = last_g - 0.02 
+        
+        if search_start < search_end:
+            # 使用 RMS 能量检测上升沿
+            s_samp = int(search_start * sr)
+            e_samp = int(search_end * sr)
+            if 0 <= s_samp < e_samp < len(y):
+                chunk = y[s_samp:e_samp]
+                # 计算 RMS (Short-term energy)
+                rms = librosa.feature.rms(y=chunk, frame_length=512, hop_length=256)[0]
+                
+                if len(rms) > 1:
+                    # 找变化率最大的点 (Onset Attack)
+                    rms_diff = np.diff(rms)
+                    if len(rms_diff) > 0:
+                        max_diff_idx = np.argmax(rms_diff)
+                        max_val = rms_diff[max_diff_idx]
+                        
+                        # 阈值判定：必须有足够的能量突变 (防止噪音触发)
+                        if max_val > 0.002: 
+                             onset_time = search_start + librosa.frames_to_time(max_diff_idx, sr=sr, hop_length=256)
+                             
+                             # 只有当这个新点比原点显著早（>0.03s）时才替换
+                             if last_g - onset_time > 0.03:
+                                 grid[last_idx] = onset_time
     
-    # 尝试检查间隔异常：
+    # 尝试检查间隔异常 (漏拍补救)：
     if period and period > 0:
         valid_grid = []
         if len(grid) > 0:
