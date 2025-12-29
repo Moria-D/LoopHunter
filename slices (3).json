@@ -1,0 +1,114 @@
+[
+  {
+    "id": 1,
+    "start": 0.0,
+    "end": 0.464,
+    "duration": 0.464,
+    "label": "Slice 1"
+  },
+  {
+    "id": 2,
+    "start": 0.464,
+    "end": 0.952,
+    "duration": 0.488,
+    "label": "Slice 2"
+  },
+  {
+    "id": 3,
+    "start": 0.952,
+    "end": 1.416,
+    "duration": 0.464,
+    "label": "Slice 3"
+  },
+  {
+    "id": 4,
+    "start": 1.416,
+    "end": 1.904,
+    "duration": 0.488,
+    "label": "Slice 4"
+  },
+  {
+    "id": 5,
+    "start": 1.904,
+    "end": 2.392,
+    "duration": 0.488,
+    "label": "Slice 5"
+  },
+  {
+    "id": 6,
+    "start": 2.392,
+    "end": 2.879,
+    "duration": 0.488,
+    "label": "Slice 6"
+  },
+  {
+    "id": 7,
+    "start": 2.879,
+    "end": 3.344,
+    "duration": 0.464,
+    "label": "Slice 7"
+  },
+  {
+    "id": 8,
+    "start": 3.344,
+    "end": 3.831,
+    "duration": 0.488,
+    "label": "Slice 8"
+  },
+  {
+    "id": 9,
+    "start": 3.831,
+    "end": 4.319,
+    "duration": 0.488,
+    "label": "Slice 9"
+  },
+  {
+    "id": 10,
+    "start": 4.319,
+    "end": 4.897,
+    "duration": 0.578,
+    "label": "Slice 10"
+  },
+  {
+    "id": 11,
+    "start": 4.897,
+    "end": 5.341,
+    "duration": 0.444,
+    "label": "Slice 11"
+  },
+  {
+    "id": 12,
+    "start": 5.341,
+    "end": 5.831,
+    "duration": 0.491,
+    "label": "Slice 12"
+  },
+  {
+    "id": 13,
+    "start": 5.831,
+    "end": 6.316,
+    "duration": 0.485,
+    "label": "Slice 13"
+  },
+  {
+    "id": 14,
+    "start": 6.316,
+    "end": 6.826,
+    "duration": 0.51,
+    "label": "Slice 14"
+  },
+  {
+    "id": 15,
+    "start": 6.826,
+    "end": 7.289,
+    "duration": 0.463,
+    "label": "Slice 15"
+  },
+  {
+    "id": 16,
+    "start": 7.289,
+    "end": 7.679,
+    "duration": 0.39,
+    "label": "Slice 16"
+  }
+]
