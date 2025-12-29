@@ -4,7 +4,10 @@ import librosa
 def detect_first_transient(y, sr, threshold_db=-60):
     """
     Detects the first significant transient (onset) in the audio.
-    This serves as a more accurate "physical start time" than librosa.beat.beat_track.
+    Uses a "Backwards Noise-Floor Scan" strategy:
+    1. Finds coarse "Loud" point.
+    2. Estimates noise floor from the preceding quiet section.
+    3. Walks backwards from the Loud point until amplitude drops to the noise floor.
     
     Args:
         y: Audio time series
@@ -17,51 +20,98 @@ def detect_first_transient(y, sr, threshold_db=-60):
     if y is None or len(y) == 0:
         return 0.0
 
-    # 1. Coarse detection using silence trimming
-    # top_db=60 means anything below -60dB relative to max is silence
-    # frame_length=2048, hop_length=512 default
     try:
-        non_silent_intervals = librosa.effects.split(y, top_db=abs(threshold_db), frame_length=2048, hop_length=512)
+        # 1. Coarse detection (Find where the main body of sound is)
+        # Use a fairly high threshold to ensure we are inside the sound, not in the noise.
+        # top_db=60 is standard, but for this reverse-walk strategy, we want to be well inside.
+        non_silent_intervals = librosa.effects.split(y, top_db=60, frame_length=1024, hop_length=256)
         if len(non_silent_intervals) == 0:
             return 0.0
             
-        start_sample = non_silent_intervals[0][0]
+        coarse_start_sample = non_silent_intervals[0][0]
         
-        # 2. Refined detection: Backtrack from coarse start
-        # The split might be a bit late (hop_length resolution). 
-        # We look a bit earlier to find the exact rising edge.
-        # Search window: 50ms before detected start
-        search_back_samples = int(0.05 * sr)
-        refine_start = max(0, start_sample - search_back_samples)
-        refine_end = min(len(y), start_sample + int(0.01 * sr)) # Look a bit forward too
-        
-        chunk = y[refine_start:refine_end]
-        if len(chunk) == 0:
-            return float(start_sample) / sr
+        # If the file starts loud immediately, return 0
+        if coarse_start_sample < 512:
+            return 0.0
             
-        # Use simple amplitude threshold on the raw waveform or RMS
-        # Absolute threshold: e.g. 0.005 (assuming normalized audio ~1.0 max)
-        # Or relative to chunk max
+        # 2. Estimate Noise Floor
+        # Analyze the region *before* the coarse start (leave a 50ms buffer to avoid the attack tail)
+        buffer_samples = int(0.05 * sr)
+        noise_region_end = max(0, coarse_start_sample - buffer_samples)
         
-        abs_y = np.abs(chunk)
-        threshold_amp = 0.005 # empirical low threshold
+        # Default low threshold (absolute silence/quantization noise)
+        base_threshold = 0.0002
         
-        # Find first index where amplitude > threshold
-        above_thresh = np.where(abs_y > threshold_amp)[0]
-        if len(above_thresh) > 0:
-            # First point exceeding threshold
-            first_idx = above_thresh[0]
-            # Ideally we want the zero-crossing immediately preceding this rise
-            # But just returning this time is usually close enough (<1ms error)
+        if noise_region_end > 1024:
+            # Check noise floor in the "silence"
+            noise_chunk = np.abs(y[:noise_region_end])
+            # Use 3 * RMS as a safe noise threshold, or max if it's sparse clicks
+            noise_rms = np.sqrt(np.mean(noise_chunk**2))
+            # Dynamic threshold: slightly above background noise
+            threshold = max(base_threshold, noise_rms * 4.0)
             
-            # Optimization: Backtrack to nearest zero crossing before this point
-            # to avoid clicking if we were to cut there (though this is just for timing info)
-            return float(refine_start + first_idx) / sr
+            # Safety cap: don't let threshold get too high if "silence" is actually loud
+            # (e.g. if coarse detection was late)
+            threshold = min(threshold, 0.01)
         else:
-            # If refinement failed to find explicit peak, stick to coarse start
-            return float(start_sample) / sr
+            # Not enough pre-audio to estimate, use base
+            threshold = base_threshold
+
+        # 3. Precise Backtracking (Reverse Walk)
+        # Walk backwards from coarse_start_sample until signal drops below threshold
+        # We look back up to 500ms
+        max_lookback = int(0.5 * sr)
+        search_start = max(0, coarse_start_sample - max_lookback)
+        
+        # Extract the region of interest: [search_start ... coarse_start + small_buffer]
+        # Include a small buffer forward just in case split was very early (unlikely)
+        roi_end = min(len(y), coarse_start_sample + 1024)
+        roi = np.abs(y[search_start : roi_end])
+        
+        # We scan BACKWARDS from the coarse point (relative to ROI)
+        start_idx_rel = coarse_start_sample - search_start
+        
+        # Window for checking "sustained silence" (e.g. 1ms) for tighter precision
+        silence_window = int(0.001 * sr)
+        
+        detected_idx = start_idx_rel
+        
+        # Iterate backwards
+        # We look for the point where the signal *was* below threshold for `silence_window` samples
+        # i.e., we are in the signal, walking left. We stop when we hit the "shore" of silence.
+        
+        for i in range(start_idx_rel, silence_window, -1):
+            # Check a small window to the left
+            # If max(window) < threshold, we found silence.
+            # The start point is i.
             
+            # Optimization: check sample `i`. If it's loud, continue.
+            if roi[i] > threshold:
+                continue
+                
+            # If sample is quiet, check if it's just a zero crossing or real silence
+            # Look at [i - window : i]
+            window = roi[i - silence_window : i]
+            if np.max(window) < threshold:
+                # Found the noise floor!
+                # The signal starts at i + 1 (approx)
+                detected_idx = i
+                break
+                
+        # 4. Final Micro-Refinement (Zero-Crossing)
+        # We found the point where amplitude rises above noise floor.
+        # Now find the nearest zero-crossing to the left (within small margin) to start cleanly.
+        # Actually, `detected_idx` is already in the noise. The first signal sample is `detected_idx + 1` or so.
+        # Let's scan forward from `detected_idx` to find the first upward trend? 
+        # No, `detected_idx` is likely the best cut point (silence).
+        
+        # Just ensure we didn't go back too far (to 0) if it wasn't necessary.
+        final_sample = search_start + detected_idx
+        
+        return float(final_sample) / sr
+
     except Exception:
+        # Fallback to coarse
         return 0.0
 
 def calculate_global_beat_duration(beat_times, total_duration, bpm_override=None, y=None, sr=None):
@@ -155,6 +205,58 @@ def calculate_global_beat_duration(beat_times, total_duration, bpm_override=None
         
         # Let's trust the physical start of sound as the Anchor.
         best_offset = first_transient_time
+
+        # 4. Tail Optimization (Micro-alignment based on Last Slice)
+        # Check if the grid alignment causes a tiny "remainder" slice at the end or cuts off slightly early.
+        # This assumes the total file duration is rhythmically significant (e.g. an exact loop).
+        
+        # Calculate where the last grid point falls relative to total_duration
+        # grid points: t = best_offset + k * best_period
+        
+        # Find the last grid point <= total_duration
+        if best_period > 0:
+            # Shift offset into [0, Period) relative to total_duration just for modulo check
+            # remainder = (total_duration - best_offset) % best_period
+            
+            # More robustly: calculate duration of the potential last slice
+            # Last full beat index
+            last_k = int(np.floor((total_duration - best_offset) / best_period))
+            last_grid_time = best_offset + last_k * best_period
+            
+            tail_duration = total_duration - last_grid_time
+            
+            # Logic:
+            # If tail_duration is very small (e.g. 0.02s of a 0.5s beat), 
+            # it likely means we started too early (shifted left), so the grid finished just before the end.
+            # We should SHIFT RIGHT (add tail_duration) to close the gap.
+            #
+            # If tail_duration is very large (close to a full beat, e.g. 0.46s of 0.48s),
+            # it likely means we started too late (shifted right), so the last beat got cut off.
+            # We should SHIFT LEFT (subtract (Period - tail_duration)) to include the full beat.
+            
+            # Thresholds: 
+            # - Small tail: < 5% of period or < 50ms (whichever is larger, but bounded)
+            # - Cutoff beat: > 95% of period
+            
+            # Let's use the user's logic: 0.02 vs 0.48. 0.02 is ~4%.
+            
+            micro_shift = 0.0
+            
+            # Case A: Tiny tail (Grid finished early) -> Shift Offset Right (+)
+            if tail_duration > 0 and tail_duration < (0.1 * best_period): 
+                # Limit correction to avoid massive jumps if it's just a random file
+                if tail_duration < 0.1: # Max 100ms correction
+                    micro_shift = tail_duration
+            
+            # Case B: Almost full beat (Grid started late) -> Shift Offset Left (-)
+            # The "missing part" is (best_period - tail_duration)
+            missing_part = best_period - tail_duration
+            if missing_part > 0 and missing_part < (0.1 * best_period):
+                 if missing_part < 0.1:
+                    micro_shift = -missing_part
+            
+            if abs(micro_shift) > 0.00001:
+                best_offset += micro_shift
         
     else:
         # Fallback if no audio provided: Ensure offset isn't negative

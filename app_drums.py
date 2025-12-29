@@ -355,7 +355,7 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
         total_duration = float(len(y) / sr)
 
     # 1. Calculate Global Parameters (Period & Offset)
-    period, offset = calculate_global_beat_duration(beat_times, total_duration, bpm_override)
+    period, offset = calculate_global_beat_duration(beat_times, total_duration, bpm_override, y=y, sr=sr)
     
     # 2. Generate Grid Points
     # We want to cover from time=0 to time=total_duration
@@ -474,12 +474,12 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
                 "label": f"Slice {sid}"
             })
             sid += 1
-            
+        
         current_k += 1
         
         if real_end >= total_duration:
             break
-            
+
     return slices, period
 
 def generate_fcpxml(slices, filename, sample_rate, total_duration):
@@ -647,6 +647,10 @@ with st.sidebar:
                 # NEW: Passing y and sr for refinement
                 bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=75.0, bpm_max=200.0)
                 st.session_state.bpm_info = bpm_info
+                
+                # Pass BPM override from session state if available and confidence is high (manual)
+                # Or trust the estimate.
+                
                 slices, period = get_beat_slices(
                     remixer.y,
                     remixer.sr,
@@ -682,6 +686,10 @@ elif st.session_state.remixer:
     # --- Info Header ---
     st.divider()
     
+    # Display original audio
+    st.subheader("🎵 Original Audio")
+    st.audio(uploaded_file, format='audio/wav')
+
     # Calculate Audio Stats（避免“自洽陷阱”：BPM 不再根据 slices 反推，而是独立估计后再驱动切片）
     slice_starts = [s.get('start') for s in (st.session_state.beat_slices or []) if isinstance(s, dict)]
     bpm_from_slices = estimate_bpm_from_times(slice_starts) if len(slice_starts) > 2 else 0.0
@@ -712,12 +720,12 @@ elif st.session_state.remixer:
             if durs:
                 beat_dur_display = np.median(durs)
     
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.2])
     c1.metric("BPM（估计）", f"{int(round(est_bpm))}")
     c2.metric("Beat Duration", f"{beat_dur_display:.3f}s")
-    c3.metric("Offset (Start)", f"{offset_display:.3f}s")
+    c3.metric("Offset (Visual)", f"{offset_display:.3f}s")
     c4.metric("切片数量", f"{len(st.session_state.beat_slices) if st.session_state.beat_slices else 0}")
-    c5.metric("采样率", f"{remixer.sr} Hz")
+    c5.metric("原曲长度", f"{remixer.duration:.2f}s")
 
     # 手动 BPM 修正
     with st.expander("🛠️ 手动修正 BPM / 重新切片", expanded=False):
