@@ -942,11 +942,22 @@ elif st.session_state.remixer:
     
     # --- Slice Previews ---
     st.divider()
-    st.subheader("🎵 Slice Previews (First 10)")
-    st.caption("Preview individual slices with their specific waveforms.")
+    
+    total_slices = len(st.session_state.beat_slices) if st.session_state.beat_slices else 0
+    display_all = total_slices < 20
+    
+    if display_all:
+        st.subheader(f"🎵 Slice Previews (All {total_slices})")
+        st.caption("Preview all slices.")
+    else:
+        st.subheader("🎵 Slice Previews (First 10)")
+        st.caption("Preview individual slices with their specific waveforms.")
     
     if st.session_state.beat_slices:
-        preview_slices = st.session_state.beat_slices[:10]
+        if display_all:
+            preview_slices = st.session_state.beat_slices
+        else:
+            preview_slices = st.session_state.beat_slices[:10]
         
         # Display in rows of 5
         rows = [preview_slices[i:i+5] for i in range(0, len(preview_slices), 5)]
