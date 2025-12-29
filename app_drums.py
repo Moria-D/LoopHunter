@@ -110,6 +110,20 @@ def estimate_bpm_from_times(times_sec):
         return 0.0
     return float(60.0 / np.median(diffs))
 
+def get_onset_energy(y, sr, time_sec, window_ms=50):
+    """计算特定时间点附近的局部能量峰值"""
+    center_frame = librosa.time_to_frames(time_sec, sr=sr)
+    half_window = int(librosa.time_to_frames(window_ms/1000.0, sr=sr))
+    
+    # 保护边界
+    start_f = max(0, center_frame - half_window)
+    end_f = min(len(y), center_frame + half_window) # 注意：这里是音频帧不是onset envelope帧
+    
+    # 为了简化，我们直接看振幅
+    # chunk = y[int(time_sec*sr - sr*0.05) : int(time_sec*sr + sr*0.05)]
+    # 但振幅大不一定是 onset，还是得用 onset strength
+    return 0 # Placeholder if needed, but we use inline logic below for speed
+
 def estimate_bpm_librosa(y, sr):
     """librosa tempo 估计（整体节奏），对弱拍/漏拍通常更稳。"""
     try:
@@ -429,10 +443,56 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
         grid = np.array(synced_grid)
         grid = np.sort(np.unique(grid))
 
+    # NEW: 增加一个额外的强制对齐步骤
+    # 有时候同步窗口还是太保守，或者 beat_times 检测本身有微小误差。
+    # 这里我们引入一个更激进的策略：如果一个网格点 g 距离 ideal_g (n * period) 偏差超过 10%，
+    # 并且附近有更强的 onset 能量峰值，强制吸附到峰值。
+    
     # 4) 把网格吸附到最近瞬态（小窗口内），避免机械切割
     # 再次运行 refine 以确保即使是未同步的网格点也能贴合瞬态
     # 并且再次过滤掉超出范围的点
     grid = refine_beat_times(y, sr, grid)
+    
+    # 4.2) 再次进行更严格的网格修正 (Post-refinement Check)
+    # 这是为了解决 Slice 11 这种微小“滑移”到下一个瞬态的问题。
+    if period and period > 0:
+        strict_grid = []
+        if len(grid) > 0:
+            strict_grid.append(grid[0])
+            for k in range(1, len(grid)):
+                prev = strict_grid[-1]
+                curr = grid[k]
+                diff = curr - prev
+                
+                # 如果间隔偏大 (1.08x - 1.4x)，很可能是吸附到了稍晚的瞬态
+                if 1.08 * period < diff < 1.4 * period:
+                     ideal_pos = prev + period
+                     # 在 ideal_pos 附近 (±0.1s) 重新搜索最强的 onset 能量
+                     # 而不仅仅是依赖 librosa 的 beat_times (因为它可能漏掉或选错)
+                     
+                     # 定义搜索范围
+                     search_start = ideal_pos - 0.1
+                     search_end = ideal_pos + 0.1
+                     
+                     # 转换到帧索引
+                     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+                     start_frame = librosa.time_to_frames(search_start, sr=sr)
+                     end_frame = librosa.time_to_frames(search_end, sr=sr)
+                     
+                     if start_frame < end_frame and end_frame < len(onset_env):
+                         local_env = onset_env[start_frame:end_frame]
+                         if len(local_env) > 0:
+                             # 找局部最大能量点
+                             max_idx = np.argmax(local_env)
+                             best_time = librosa.frames_to_time(start_frame + max_idx, sr=sr)
+                             
+                             # 如果这个能量点比当前的 curr 明显更早，且更接近理想位置
+                             if abs(best_time - ideal_pos) < abs(curr - ideal_pos) and curr - best_time > 0.03:
+                                 curr = best_time
+                
+                strict_grid.append(curr)
+            grid = np.array(strict_grid)
+
     grid = grid[(grid >= 0.0) & (grid <= total_duration)]
     grid = np.sort(np.unique(grid))
 
@@ -467,6 +527,62 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
                         if prev < mid_beat < curr:
                             valid_grid.append(mid_beat)
                 
+                # NEW: 针对 Slice 11 稍微偏长的情况（1.1 - 1.4 倍周期）
+                # 这种情况通常不是完全漏拍，而是吸附到了错误的（较晚的）瞬态
+                elif 1.05 * period < diff < 1.45 * period:
+                     ideal_next = prev + period
+                     # 我们要找的是在 ideal_next 左侧（更早）的一个潜藏 beat
+                     # 如果当前的 curr 明显比 ideal_next 晚 (> 0.05s)
+                     
+                     # 1. 首先尝试在 beat_times 里找
+                     better_idx = (np.abs(bt - ideal_next)).argmin() if len(bt) > 0 else -1
+                     
+                     found_better = False
+                     if better_idx != -1:
+                         better_beat = bt[better_idx]
+                         # 如果 better_beat 在 ideal_next 附近 (±0.08s) 且比 curr 明显早
+                         if abs(better_beat - ideal_next) < 0.08 * period and curr - better_beat > 0.04:
+                             curr = better_beat
+                             found_better = True
+                     
+                     # 2. 如果 beat_times 里没找到，尝试用能量包络找 (Hard Search)
+                     # 很多时候弱拍会被 librosa.beat 忽略，但 onset 能量还在
+                     if not found_better:
+                         # 搜索窗口：理想位置的前后 10% 周期
+                         # 重心稍微前移，因为我们怀疑现在的点晚了
+                         search_start = ideal_next - 0.15 * period
+                         search_end = ideal_next + 0.05 * period
+                         
+                         # 计算局部 onset strength
+                         s_frame = librosa.time_to_frames(search_start, sr=sr)
+                         e_frame = librosa.time_to_frames(search_end, sr=sr)
+                         
+                         # 还需要整个 envelope，避免重复计算，这里局部算一下或者传入
+                         # 为了性能，这里只算局部的 rms 突变可能不够，还是调用 librosa
+                         # 注意：这步比较耗时，但只针对异常 slice 运行
+                         
+                         # 简单方案：找振幅包络的上升沿 (Amplitude Rise)
+                         # 提取波形片段
+                         s_samp = int(search_start * sr)
+                         e_samp = int(search_end * sr)
+                         if 0 <= s_samp < e_samp < len(y):
+                             chunk = y[s_samp:e_samp]
+                             # 计算 RMS 能量曲线
+                             hop = 256
+                             rms = librosa.feature.rms(y=chunk, frame_length=512, hop_length=hop)[0]
+                             # 找 RMS 增量最大的地方 (Onset)
+                             if len(rms) > 1:
+                                 rms_diff = np.diff(rms)
+                                 # 简单的峰值检测
+                                 max_d_idx = np.argmax(rms_diff)
+                                 if rms_diff[max_d_idx] > 0.005: # 阈值：有一定能量突变
+                                     # 换算回时间
+                                     onset_time = search_start + librosa.frames_to_time(max_d_idx, sr=sr, hop_length=hop)
+                                     
+                                     # 如果这个新发现的 onset 确实比 curr 早
+                                     if curr - onset_time > 0.04:
+                                         curr = onset_time
+
                 valid_grid.append(curr)
             grid = np.array(valid_grid)
     
