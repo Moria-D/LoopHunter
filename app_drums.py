@@ -420,28 +420,37 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
     next_grid_time = offset + first_boundary_k * period
     
     # If there is a significant gap before the first grid alignment (intro)
-    if next_grid_time > 0.02:
-         # Add Intro slice [0, next_grid_time]
-         # This slice might NOT be 'beat_duration' length. 
-         # But the user asked for shared beat_duration. 
-         # Intro is exception? usually yes.
-         
-         slices.append({
-             "id": sid,
-             "start": 0.0,
-             "end": round(next_grid_time, 3),
-             "duration": round(next_grid_time, 3),
-             "label": "Intro / Pickup"
-         })
-         sid += 1
-         current_time = next_time = next_grid_time
-         current_k = first_boundary_k
-    else:
-         # We are practically at 0 (or negative), so start first full slice from 0?
-         # Or align strictly to grid even if it means start=0.001?
-         # Let's align strictly.
-         current_k = first_boundary_k
-         
+    # user request: No explicit Intro slice. Just start first slice at offset if offset > 0.
+    # The grid generation logic below handles this if we set current_k correctly.
+    
+    # If offset > 0, the first grid point at k=0 is at offset.
+    # If offset < 0, the first grid point > 0 is at some k.
+    
+    # Let's ensure strict alignment.
+    # We want slices: 
+    # Slice 1: [offset, offset + period]
+    # Slice 2: [offset + period, offset + 2*period]
+    # ...
+    # But only if offset >= 0.
+    # If offset < 0 (meaning the theoretical grid start is before 0), we want:
+    # Slice 1: [0, next_grid_point] ?? No, user said "start from actual sound start".
+    # detect_first_transient ensures offset is the actual sound start (>=0).
+    # So offset should be >= 0 usually.
+    
+    # If offset is very small (< 0.01), treat as 0.
+    
+    current_k = 0
+    
+    # If offset was calculated via regression (not transient) it might be negative.
+    # But our new logic in utils_bpm uses detect_first_transient, so offset ~ start of audio.
+    # If beat_times logic prevailed (no audio provided?), offset could be anything.
+    
+    # Ensure start is not negative
+    if offset < 0:
+        # Shift offset by periods until >= 0
+        shift_k = int(np.ceil((0.0 - offset) / period))
+        offset += shift_k * period
+    
     # Generate Full Slices
     while True:
         t_start_grid = offset + current_k * period
@@ -451,12 +460,12 @@ def get_beat_slices(y, sr, beat_times, total_duration, bpm_override=None):
         real_start = max(0.0, t_start_grid)
         real_end = min(total_duration, t_end_grid)
         
-        if real_start >= total_duration - 0.01:
+        if real_start >= total_duration - 0.005:
             break
             
         dur = real_end - real_start
         
-        if dur > 0.01:
+        if dur > 0.005:
             slices.append({
                 "id": sid,
                 "start": round(real_start, 3),
@@ -638,7 +647,7 @@ with st.sidebar:
                 # NEW: Passing y and sr for refinement
                 bpm_info = estimate_bpm_best(remixer.y, remixer.sr, bpm_min=75.0, bpm_max=200.0)
                 st.session_state.bpm_info = bpm_info
-                slices, _ = get_beat_slices(
+                slices, period = get_beat_slices(
                     remixer.y,
                     remixer.sr,
                     remixer.beat_times,
@@ -685,21 +694,30 @@ elif st.session_state.remixer:
 
     est_bpm = float(bpm_info.get("bpm", 0.0) or 0.0)
     
-    # Try to find the used beat_duration
-    # Since get_beat_slices returns it, we could store it in session state, but for now let's infer or recalculate
-    # Actually, simpler to look at the first few slices if they are regular
+    # Try to find the used beat_duration and offset
+    # offset is essentially the start of the first beat-aligned slice
     beat_dur_display = 0.0
-    if st.session_state.beat_slices and len(st.session_state.beat_slices) > 1:
-         # Take median of first 5 slices duration
-         durs = [s['duration'] for s in st.session_state.beat_slices[:5] if 'duration' in s]
-         if durs:
-             beat_dur_display = np.median(durs)
+    offset_display = 0.0
     
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("BPM（估计）", f"{est_bpm:.1f}")
-    c2.metric("Beat Duration (Shared)", f"{beat_dur_display:.4f}s")
-    c3.metric("切片数量", f"{len(st.session_state.beat_slices) if st.session_state.beat_slices else 0}")
-    c4.metric("采样率", f"{remixer.sr} Hz")
+    if st.session_state.beat_slices and len(st.session_state.beat_slices) > 0:
+         # Find the first slice that isn't labeled "Intro" if possible, 
+         # but users just want to know the physical offset of the content.
+         # If Slice 1 is 0.2s to 0.7s, offset is 0.2s.
+         first_slice = st.session_state.beat_slices[0]
+         offset_display = first_slice.get('start', 0.0)
+         
+         # Take median of first 5 slices duration
+         if len(st.session_state.beat_slices) > 1:
+            durs = [s['duration'] for s in st.session_state.beat_slices[:5] if 'duration' in s]
+            if durs:
+                beat_dur_display = np.median(durs)
+    
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("BPM（估计）", f"{int(round(est_bpm))}")
+    c2.metric("Beat Duration", f"{beat_dur_display:.3f}s")
+    c3.metric("Offset (Start)", f"{offset_display:.3f}s")
+    c4.metric("切片数量", f"{len(st.session_state.beat_slices) if st.session_state.beat_slices else 0}")
+    c5.metric("采样率", f"{remixer.sr} Hz")
 
     # 手动 BPM 修正
     with st.expander("🛠️ 手动修正 BPM / 重新切片", expanded=False):
@@ -717,7 +735,7 @@ elif st.session_state.remixer:
                 # Update session BPM info to force the override
                 st.session_state.bpm_info = {"bpm": manual_bpm, "confidence": 1.0, "base_bpm": manual_bpm, "candidates": []}
                 # Re-run slicing
-                slices, _ = get_beat_slices(
+                slices, period = get_beat_slices(
                     remixer.y,
                     remixer.sr,
                     remixer.beat_times,
